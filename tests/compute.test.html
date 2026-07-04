@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>compute.js テスト</title>
+<style>
+  :root{
+    --bg:#0d1520; --card:#162033; --border:#1a2744;
+    --text:#e8edf5; --text-2:#8c9bb5; --accent:#3b9eff;
+    --green:#00d68f; --red:#ff4d6a; --amber:#ffb020;
+  }
+  *{box-sizing:border-box;}
+  body{font-family:ui-monospace,'JetBrains Mono',Menlo,monospace;background:var(--bg);color:var(--text);
+       margin:0;padding:24px;line-height:1.45;}
+  h1{color:var(--accent);font-size:20px;margin:0 0 4px;}
+  .intro{color:var(--text-2);font-size:12px;margin-bottom:18px;}
+  .intro code{background:var(--card);padding:1px 5px;border-radius:3px;}
+  .summary{padding:12px 16px;border-radius:8px;font-weight:700;font-size:14px;margin:18px 0;}
+  .summary.ok  {background:rgba(0,214,143,0.12);border:1px solid var(--green);color:var(--green);}
+  .summary.fail{background:rgba(255,77,106,0.12);border:1px solid var(--red);  color:var(--red);}
+  .group{margin:14px 0;background:var(--card);border:1px solid var(--border);border-radius:8px;
+         padding:10px 14px;}
+  .group h2{font-size:13px;color:var(--text-2);margin:0 0 6px;text-transform:uppercase;letter-spacing:0.04em;}
+  .case{padding:3px 0;font-size:12.5px;border-left:3px solid transparent;padding-left:8px;margin-left:-3px;}
+  .pass{color:var(--green);}
+  .fail{color:var(--red);border-left-color:var(--red);background:rgba(255,77,106,0.06);}
+  .label{color:var(--text);}
+  .expected{color:var(--text-2);}
+  .got{color:var(--amber);}
+  .meta{color:var(--text-2);font-size:11px;margin-top:24px;}
+</style>
+</head>
+<body>
+<h1>compute.js — 回帰テスト</h1>
+<p class="intro">
+  集計・フィルタ・国内/国際判定の純粋ロジックを実コードで実行して結果を確認します。<br>
+  <code>js/compute.js</code> の本物の関数を呼び、<code>AP</code>（空港表）と <code>flights</code> は
+  この HTML 内の<strong>固定フィクスチャ</strong>を注入します<br>
+  （<code>airports.js</code> / <code>datasource.js</code> は読み込まない＝実データ変動に左右されないロジック単体テスト）。<br>
+  ブラウザで <code>tests/compute.test.html</code> を開くだけで動作します（ビルド不要・ノービルド前提に整合）。
+</p>
+<div id="summary" class="summary"></div>
+<div id="results"></div>
+<div class="meta">ファイル：<code>tests/compute.test.html</code> ／ 依存：<code>../js/compute.js</code>（AP / flights はフィクスチャ）</div>
+
+<!-- フィクスチャ：compute.js が参照するグローバル AP / flights をテスト用に用意する。
+     compute.js は AP / flights を「関数内」でしか参照しないため、ここで先に定義しておけば足りる。 -->
+<script>
+// 国内/国際判定を網羅するための最小空港セット：
+//   同一国（Japan）・別国（USA）・同一管轄グループ（Denmark⇄Greenland(Denmark)）・
+//   別管轄の B タイプ（China / Hong Kong(China)）・forceIntl 付き、を含む。
+var AP = {
+  RJTT: { co:'Japan',               city:'Tokyo(HND)',  ct:'Asia' },
+  RJAA: { co:'Japan',               city:'Tokyo(NRT)',  ct:'Asia' },
+  KSEA: { co:'USA',                 city:'Seattle',     ct:'North America' },
+  KFRC: { co:'USA',                 city:'ForceUSA',    ct:'North America', forceIntl:true },
+  EKCH: { co:'Denmark',             city:'Copenhagen',  ct:'Europe' },
+  BGGH: { co:'Greenland(Denmark)',  city:'Nuuk',        ct:'North America' },
+  BGBW: { co:'Greenland(Denmark)',  city:'Narsarsuaq',  ct:'North America', forceIntl:true },
+  ZBAA: { co:'China',               city:'Beijing',     ct:'Asia' },
+  VHHH: { co:'Hong Kong(China)',    city:'Hong Kong',   ct:'Asia' },
+};
+
+// フライト集合：年/月/曜日/航空会社/機材/所要時間/国内・国際/未収録(ZZZZ) を散らす。
+// 曜日（Mon=0..Sun=6）コメントは computeAll の wd ロジックと突き合わせ済み。
+var flights = [
+  { date:'2024-01-05', dep:'RJTT', arr:'RJAA', ac:'B738', al:'ANA', t:'1h00m' }, // 国内JP / 金(wd4)
+  { date:'2024-07-20', dep:'RJTT', arr:'KSEA', ac:'B77W', al:'ANA', t:'9h30m' }, // 国際   / 土(wd5)
+  { date:'2025-03-10', dep:'EKCH', arr:'BGGH', ac:'A320', al:'SAS', t:'4h15m' }, // 管轄国内 / 月(wd0)
+  { date:'2025-03-11', dep:'ZBAA', arr:'VHHH', ac:'A333', al:'CCA', t:'3h00m' }, // 国際(CN/HK) / 火(wd1)
+  { date:'2025-12-25', dep:'RJTT', arr:'ZZZZ', ac:'B738', al:'JAL', t:'2h00m' }, // unknown(ZZZZ未収録) / 木(wd3)
+];
+</script>
+<script src="../js/compute.js"></script>
+
+<script>
+// =========================== ミニ assert ハーネス ===========================
+// normalize.test.html / parse.test.html と同じ作法（依存追加なし）。
+let _passed = 0, _failed = 0;
+let _currentGroup = null;
+
+function group(name){
+  const div = document.createElement('div');
+  div.className = 'group';
+  const h2 = document.createElement('h2');
+  h2.textContent = name;
+  div.appendChild(h2);
+  document.getElementById('results').appendChild(div);
+  _currentGroup = div;
+}
+
+function eq(label, actual, expected){
+  const ok = (actual === expected) ||
+             (Number.isNaN(actual) && Number.isNaN(expected));
+  const row = document.createElement('div');
+  row.className = 'case ' + (ok ? 'pass' : 'fail');
+  if(ok){
+    row.innerHTML = '<span class="label">✓ ' + escapeHtml(label) + '</span>';
+    _passed++;
+  } else {
+    row.innerHTML = '<span class="label">✗ ' + escapeHtml(label) + '</span> ' +
+                    '<span class="expected">expected ' + escapeHtml(JSON.stringify(expected)) + '</span> ' +
+                    '<span class="got">got ' + escapeHtml(JSON.stringify(actual)) + '</span>';
+    _failed++;
+  }
+  _currentGroup.appendChild(row);
+}
+
+// 配列・タプル比較用：JSON 文字列化して eq に通す薄いラッパ。
+function arrEq(label, actual, expected){
+  eq(label, JSON.stringify(actual), JSON.stringify(expected));
+}
+
+function escapeHtml(s){
+  return String(s).replace(/[&<>"']/g, ch => ({
+    '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+  }[ch]));
+}
+
+function done(){
+  const total = _passed + _failed;
+  const sum = document.getElementById('summary');
+  if(_failed === 0){
+    sum.className = 'summary ok';
+    sum.textContent = '✓ ' + total + ' 件すべて合格';
+  } else {
+    sum.className = 'summary fail';
+    sum.textContent = '✗ ' + _failed + ' / ' + total + ' 件失敗';
+  }
+}
+
+// FilterState を毎回まっさらにしてから上書きするヘルパ（テスト間の状態漏れ防止）。
+function setFilter(o){
+  FilterState.years=[]; FilterState.airlines=[]; FilterState.aircraft=[];
+  FilterState.countries=[]; FilterState.scope=[]; FilterState.months=[]; FilterState.weekdays=[];
+  // 共有計算層（フェーズY）の軸もリセット。
+  FilterState.airports=[]; FilterState.cities=[]; FilterState.continents=[];
+  FilterState.depAirports=[]; FilterState.arrAirports=[];
+  FilterState.depCities=[]; FilterState.arrCities=[]; FilterState.depCountries=[]; FilterState.arrCountries=[];
+  FilterState.depContinents=[]; FilterState.arrContinents=[];
+  FilterState.contScope=[]; FilterState.durations=[]; FilterState.durationRange=[];
+  Object.assign(FilterState, o || {});
+}
+
+// ============================ テストケース ============================
+
+// ---- _flightDomesticState（国内/国際/unknown の三値判定と優先順位）----
+group('_flightDomesticState（三値判定）');
+eq('同一国 → domestic',                _flightDomesticState({dep:'RJTT', arr:'RJAA'}), 'domestic');
+eq('別国 → international',              _flightDomesticState({dep:'RJTT', arr:'KSEA'}), 'international');
+eq('同一管轄(DK⇄GL) → domestic',       _flightDomesticState({dep:'EKCH', arr:'BGGH'}), 'domestic');
+eq('別管轄(CN/HK) → international',     _flightDomesticState({dep:'ZBAA', arr:'VHHH'}), 'international');
+eq('dep 未収録 → unknown',             _flightDomesticState({dep:'ZZZZ', arr:'RJTT'}), 'unknown');
+eq('arr 未収録 → unknown',             _flightDomesticState({dep:'RJTT', arr:'ZZZZ'}), 'unknown');
+eq('forceIntl が管轄国内を上書き → international', _flightDomesticState({dep:'EKCH', arr:'BGBW'}), 'international');
+eq('co 一致は forceIntl より優先 → domestic',     _flightDomesticState({dep:'KSEA', arr:'KFRC'}), 'domestic');
+
+// ---- getFiltered / _buildPredicates（各フィルタ述語）----
+group('getFiltered（フィルタ述語：全 5 便のフィクスチャを絞る）');
+setFilter({});                       eq('絞り込み無し → 全 5 件',        getFiltered().length, 5);
+setFilter({years:['2024']});         eq("years ['2024'] → 2 件",         getFiltered().length, 2);
+setFilter({airlines:['ANA']});       eq("airlines ['ANA'] → 2 件",       getFiltered().length, 2);
+setFilter({aircraft:['B738']});      eq("aircraft ['B738'] → 2 件",      getFiltered().length, 2);
+setFilter({countries:['Japan']});    eq("countries ['Japan'] → 3 件",    getFiltered().length, 3);
+setFilter({months:['03']});          eq("months ['03'] → 2 件",          getFiltered().length, 2);
+setFilter({weekdays:['0']});         eq("weekdays ['0'](月) → 1 件",     getFiltered().length, 1);
+
+// ---- scope（国内/国際）と unknown の扱い ----
+group('scope フィルタ（unknown は両方から除外＝今回の回帰対象）');
+setFilter({scope:['domestic']});
+eq("scope domestic → 2 件",                getFiltered().length, 2);
+eq('scope domestic に unknown便(ZZZZ)を含まない', getFiltered().some(f=>f.arr==='ZZZZ'), false);
+setFilter({scope:['international']});
+eq("scope international → 2 件",            getFiltered().length, 2);
+eq('scope international に unknown便(ZZZZ)を含まない', getFiltered().some(f=>f.arr==='ZZZZ'), false);
+setFilter({scope:['domestic','international']});
+eq('scope 両選択 → 絞り込み無し(全 5 件)',   getFiltered().length, 5);
+setFilter({years:['2025'], scope:['domestic']});
+eq('複合: 2025 かつ domestic → 1 件',        getFiltered().length, 1);
+
+// ---- isAnyFilterActive ----
+group('isAnyFilterActive');
+setFilter({});                              eq('無選択 → false',          isAnyFilterActive(), false);
+setFilter({scope:['domestic','international']}); eq('scope 2 個でも true(length>0)', isAnyFilterActive(), true);
+setFilter({years:['2024']});                eq('years 選択 → true',       isAnyFilterActive(), true);
+setFilter({}); // 後続テストに影響しないよう片付け
+
+// ---- computeAll（集計）----
+group('computeAll（集計の整合）');
+const C = computeAll(flights);
+arrEq('ac 最多は B738×2',  C.ac[0], ['B738', 2]);
+arrEq('al 最多は ANA×2',   C.al[0], ['ANA', 2]);
+arrEq('ap 最多は RJTT×3',  C.ap[0], ['RJTT', 3]);
+eq('rt エントリ数 = 5',     C.rt.length, 5);
+eq('yr 2024 = 2',           C.yr['2024'], 2);
+eq('yr 2025 = 3',           C.yr['2025'], 3);
+eq('mo 3月 = 2',            C.mo[3], 2);
+eq('mo 12月 = 1',           C.mo[12], 1);
+arrEq('co 最多は Japan×4',  C.co[0], ['Japan', 4]);
+eq('wd 月曜(0) = 1',        C.wd[0], 1);
+eq('wd 金曜(4) = 1',        C.wd[4], 1);
+eq('wd 日曜(6) = 0',        C.wd[6], 0);
+eq('acMin B738 = 180 (60+120)', C.acMin['B738'], 180);
+eq('alMin ANA = 630 (60+570)',  C.alMin['ANA'], 630);
+
+// ---- computeSetStats / compareStats（比較用要約）----
+group('computeSetStats / compareStats');
+const S = computeSetStats(flights);
+eq('count = 5',                          S.count, 5);
+eq('mins 合計 = 1185',                   S.mins, 1185);
+eq('unique airports = 8 (ZZZZ 含む)',    S.airports.size, 8);
+eq('unique countries = 6 (ZZZZ 除外)',   S.countries.size, 6);
+const cmp = compareStats(flights.slice(0,2), flights.slice(2));
+eq('compare A.count = 2',  cmp.a.count, 2);
+eq('compare B.count = 3',  cmp.b.count, 3);
+eq('compare A.mins = 630', cmp.a.mins, 630);
+eq('compare B.mins = 555', cmp.b.mins, 555);
+
+// ======================= 共有計算層（フェーズY・2026-07-02） =======================
+
+// ---- _flightContinents / _flightContinentState（大陸ヘルパと大陸内/間の三値）----
+group('_flightContinentState（大陸内/間/unknown の三値）');
+eq('同一大陸(Asia→Asia) → intra',      _flightContinentState({dep:'RJTT', arr:'RJAA'}), 'intra');
+eq('別大陸(Asia→NA) → inter',          _flightContinentState({dep:'RJTT', arr:'KSEA'}), 'inter');
+eq('別大陸(Europe→NA) → inter',        _flightContinentState({dep:'EKCH', arr:'BGGH'}), 'inter');
+eq('dep 未収録 → unknown',             _flightContinentState({dep:'ZZZZ', arr:'RJTT'}), 'unknown');
+eq('arr 未収録 → unknown',             _flightContinentState({dep:'RJTT', arr:'ZZZZ'}), 'unknown');
+arrEq('_flightContinents(Asia→NA)',    _flightContinents({dep:'RJTT', arr:'KSEA'}), ['Asia','North America']);
+arrEq('_flightContinents(未収録側は除外)', _flightContinents({dep:'RJTT', arr:'ZZZZ'}), ['Asia']);
+
+// ---- _durationBucket / DURATION_BUCKETS（非重複・境界は下限含む/上限含まず）----
+group('_durationBucket（分 → バケット・境界確認）');
+eq('0分 → short',        _durationBucket(0),   'short');
+eq('59分 → short',       _durationBucket(59),  'short');
+eq('60分(境界) → medium', _durationBucket(60),  'medium');
+eq('120分 → medium',     _durationBucket(120), 'medium');
+eq('180分(境界) → long',  _durationBucket(180), 'long');
+eq('255分 → long',       _durationBucket(255), 'long');
+eq('360分(境界) → xlong', _durationBucket(360), 'xlong');
+eq('600分(境界) → ultra', _durationBucket(600), 'ultra');
+eq('負値 → null',         _durationBucket(-1),  null);
+eq('バケット定義は 5 段', DURATION_BUCKETS.length, 5);
+
+// ---- 新フィルタ述語（dep/arr 空港・大陸・大陸内外・飛行時間）----
+group('新フィルタ述語（全 5 便のフィクスチャを絞る）');
+setFilter({airports:['RJTT']});      eq("airports ['RJTT']（発着どちらか） → 3 件", getFiltered().length, 3);
+setFilter({airports:['RJAA']});      eq("airports ['RJAA']（arr のみ該当） → 1 件", getFiltered().length, 1);
+setFilter({airports:['KSEA']});      eq("airports ['KSEA']（arr のみ該当） → 1 件", getFiltered().length, 1);
+setFilter({cities:['Tokyo(HND)']});  eq("cities ['Tokyo(HND)']（発着どちらか） → 3 件", getFiltered().length, 3);
+setFilter({cities:['Seattle']});     eq("cities ['Seattle']（arr のみ該当） → 1 件", getFiltered().length, 1);
+setFilter({continents:['North America']}); eq("continents ['NA']（either） → 2 件", getFiltered().length, 2);
+setFilter({depCities:['Tokyo(HND)']}); eq("depCities ['Tokyo(HND)'] → 3 件", getFiltered().length, 3);
+setFilter({arrCities:['Tokyo(HND)']}); eq("arrCities ['Tokyo(HND)'] → 0 件", getFiltered().length, 0);
+setFilter({depCountries:['Japan']}); eq("depCountries ['Japan'] → 3 件", getFiltered().length, 3);
+setFilter({arrCountries:['USA']});   eq("arrCountries ['USA'] → 1 件", getFiltered().length, 1);
+setFilter({depAirports:['RJTT']});   eq("depAirports ['RJTT'] → 3 件",       getFiltered().length, 3);
+setFilter({arrAirports:['RJAA']});   eq("arrAirports ['RJAA'] → 1 件",       getFiltered().length, 1);
+setFilter({depAirports:['RJTT'], arrAirports:['KSEA']});
+eq('ルート＝dep+arr 重ね掛け(RJTT→KSEA) → 1 件', getFiltered().length, 1);
+setFilter({depContinents:['Asia']}); eq("depContinents ['Asia'] → 4 件",     getFiltered().length, 4);
+setFilter({arrContinents:['North America']}); eq("arrContinents ['NA'] → 2 件", getFiltered().length, 2);
+
+group('大陸内/間 scope（contScope・unknown は両方から除外）');
+setFilter({contScope:['intra']});    eq("contScope intra → 2 件",            getFiltered().length, 2);
+eq('intra に unknown便(ZZZZ)を含まない', getFiltered().some(f=>f.arr==='ZZZZ'), false);
+setFilter({contScope:['inter']});    eq("contScope inter → 2 件",            getFiltered().length, 2);
+setFilter({contScope:['intra','inter']}); eq('両選択 → 全 5 件(no-op)',       getFiltered().length, 5);
+
+group('飛行時間フィルタ（durations バケット多選択）');
+setFilter({durations:['medium']});          eq("medium → 2 件(60/120分)",   getFiltered().length, 2);
+setFilter({durations:['long']});            eq("long → 2 件(180/255分)",     getFiltered().length, 2);
+setFilter({durations:['xlong']});           eq("xlong → 1 件(570分)",        getFiltered().length, 1);
+setFilter({durations:['short']});           eq("short → 0 件",               getFiltered().length, 0);
+setFilter({durations:['medium','long']});   eq("medium+long → 4 件",         getFiltered().length, 4);
+// カスタム範囲（分）：フィクスチャ t = 60/570/255/180/120 分
+setFilter({durationRange:[120,255]});        eq("range 120–255分 → 3 件(120/180/255)", getFiltered().length, 3);
+setFilter({durationRange:[0,60]});           eq("range 0–60分 → 1 件(60)",    getFiltered().length, 1);
+setFilter({durationRange:[600,100000]});     eq("range 600分以上 → 0 件",     getFiltered().length, 0);
+setFilter({durationRange:[100,200], durations:['ultra']}); eq("range はバケットを上書き → 2 件(120/180)", getFiltered().length, 2);
+
+group('isAnyFilterActive（新軸も検知）');
+setFilter({depAirports:['RJTT']});   eq('depAirports 選択 → true',  isAnyFilterActive(), true);
+setFilter({durations:['long']});     eq('durations 選択 → true',    isAnyFilterActive(), true);
+setFilter({contScope:['intra','inter']}); eq('contScope 2 個でも true', isAnyFilterActive(), true);
+setFilter({}); // 片付け
+
+done();
+</script>
+</body>
+</html>

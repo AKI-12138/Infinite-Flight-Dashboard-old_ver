@@ -1,0 +1,1189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<!-- モバイルのブラウザ上部（iOS Safari のステータスバー背景 / Android Chrome のステータスバー）を
+     ヘッダー色に合わせる。content は JS がテーマ（light/dark）に応じて更新する（_updateThemeColorMeta）。
+     既定は light の背景色（--bg light）。 -->
+<meta name="theme-color" id="themeColorMeta" content="#f4f6fa">
+<title>Infinite Flight — Dashboard</title>
+<!-- for pass start-->
+
+<!-- for pass end-->
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"/>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<!-- Leaflet.Geodesic：2D 地図のルートを大圏（球面上の最短経路）で描画するためのプラグイン。
+     必ず Leaflet 本体の後に読み込む必要がある。 -->
+<script src="https://cdn.jsdelivr.net/npm/leaflet.geodesic@2.7.1/dist/leaflet.geodesic.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<!-- Globe.gl は three.js を含む UMD 単独バンドル。3D 地球ビュー用 -->
+<script src="https://cdn.jsdelivr.net/npm/globe.gl@2.36.0/dist/globe.gl.min.js"></script>
+<link rel="stylesheet" href="css/styles.css?v=20260703d">
+</head>
+<body>
+
+<!-- 旧 dirty-banner / autosave-banner は廃止し、ヘッダの保存ステータスアイコンで代替。
+     保存状態はヘッダ右端の小さな ✓ アイコンで常時可視化（フェーズB の B-3 改修）。 -->
+
+
+<!-- Toast -->
+<div class="toast" id="toast">✓ Flight added successfully</div>
+
+<!-- Restore Modal — 新セッション（タブ閉じ後の再アクセス）で localStorage にデータがある時のみ表示。
+     リフレッシュ時は表示せず黙って自動復元する。外側クリックでは閉じない（重要判断のため）。 -->
+<div class="restore-overlay" id="restoreOverlay">
+  <div class="restore-box">
+    <div class="restore-icon" aria-hidden="true">
+      <svg viewBox="0 0 100 50" xmlns="http://www.w3.org/2000/svg">
+        <path d="M 50 25 C 70 5 95 5 95 25 C 95 45 70 45 50 25 C 30 5 5 5 5 25 C 5 45 30 45 50 25 Z"
+              fill="none" stroke="currentColor" stroke-width="10"
+              stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </div>
+    <div class="restore-title">Welcome back</div>
+    <div class="restore-desc">
+      We found <strong><span id="restoreCount">0</span> flights</strong> from your last session.<br>
+      <span id="restoreSavedAtWrap" style="display:none;">Last saved <strong><span id="restoreSavedAt">—</span></strong>.</span>
+    </div>
+    <div class="restore-note">Saved on your device · not sent anywhere.</div>
+    <div class="restore-actions">
+      <button class="btn-primary" id="restoreYesBtn" onclick="restoreFromStorage()">✓ Restore</button>
+      <button class="btn-outline" id="restoreNoBtn" onclick="startFreshKeepStorage()">+ Start fresh</button>
+    </div>
+  </div>
+</div>
+
+<!-- Save Status Info Modal — 保存ステータスアイコンクリック時に表示。
+     現在の状態（OK / 失敗 / 無効）に応じて見出し・色・本文を切り替え。 -->
+<div class="restore-overlay" id="saveStatusOverlay" onclick="if(event.target===this)closeSaveStatusInfo()">
+  <div class="restore-box" id="saveStatusBox">
+    <div class="restore-icon" id="saveStatusInfoIcon" aria-hidden="true">
+      <span style="font-size:30px;font-weight:700;line-height:1;" id="saveStatusInfoGlyph">✓</span>
+    </div>
+    <div class="restore-title" id="saveStatusInfoTitle">Auto-saved</div>
+    <div class="restore-desc" id="saveStatusInfoDesc">
+      Your flights are automatically saved to this device's storage.<br>
+      CSV backup recommended for safety.
+    </div>
+    <div class="restore-note" id="saveStatusInfoNote">Saved on your device · not sent anywhere.</div>
+    <div class="restore-actions">
+      <button class="btn-primary" onclick="openExport(); closeSaveStatusInfo();">📤 Back up as CSV</button>
+      <button class="btn-outline" onclick="closeSaveStatusInfo()">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- Notification Banner — 保存通知バナー（緑 30 秒で自動消滅 / 赤 ✕で閉じるまで常設）。
+     Add/Delete/Import 等のデータ変更があったときに上部にスライドダウン表示。 -->
+<div class="notify-banner" id="notifyBanner">
+  <span class="notify-msg" id="notifyMsg"></span>
+  <button class="notify-close" id="notifyClose" onclick="closeNotifyBanner()" aria-label="Dismiss">✕</button>
+</div>
+
+<!-- Confirm Delete Modal -->
+<div class="confirm-overlay" id="confirmOverlay" onclick="if(event.target===this)closeConfirm()">
+  <div class="confirm-box">
+    <div class="confirm-icon">⚠️</div>
+    <div class="confirm-title" id="confirmTitle">Delete Flights?</div>
+    <div class="confirm-desc" id="confirmDesc">This will permanently remove <strong>0 flights</strong> from your log. This action cannot be undone.</div>
+    <div class="confirm-actions">
+      <button class="btn-cancel" onclick="closeConfirm()">Cancel</button>
+      <button class="btn-danger-solid" id="confirmBtn" onclick="executeDelete()">🗑️ Delete</button>
+    </div>
+  </div>
+</div>
+
+<!-- Export Options Modal -->
+<div class="modal-overlay" id="exportOverlay" onclick="if(event.target===this)closeExport()">
+  <div class="modal">
+    <div class="modal-head">
+      <h3>↓ Export</h3>
+      <button class="btn-close" onclick="closeExport()">✕</button>
+    </div>
+    <div class="modal-body">
+      <p style="margin-bottom:14px;color:var(--text-2);font-size:13px;">Choose what to download.</p>
+      <label class="export-option" for="exportFlights">
+        <input type="checkbox" class="cb" id="exportFlights" checked>
+        <span class="export-option-text">
+          <strong>Flight Log</strong>
+          <span class="export-option-detail" id="exportFlightsCount">— flights</span>
+        </span>
+      </label>
+      <div class="export-filename-row">
+        <span class="export-filename-label">File:</span>
+        <input type="text" id="exportFlightsPrefix" class="export-filename-input"
+               maxlength="40" placeholder="flightslog"
+               oninput="onExportPrefixInput()" autocomplete="off" spellcheck="false">
+        <span class="export-filename-preview" id="exportFlightsPreview">flightslog_2026-01-01.csv</span>
+      </div>
+      <label class="export-option" for="exportAirports">
+        <input type="checkbox" class="cb" id="exportAirports">
+        <span class="export-option-text">
+          <strong>Custom Airports</strong>
+          <span class="export-option-detail" id="exportAirportsCount">— airports added</span>
+        </span>
+      </label>
+      <div class="export-filename-row">
+        <span class="export-filename-label">File:</span>
+        <input type="text" id="exportAirportsPrefix" class="export-filename-input"
+               maxlength="40" placeholder="airports"
+               oninput="onExportPrefixInput()" autocomplete="off" spellcheck="false">
+        <span class="export-filename-preview" id="exportAirportsPreview">airports_2026-01-01.csv</span>
+      </div>
+      <div class="modal-actions">
+        <button class="btn-outline" onclick="closeExport()">Cancel</button>
+        <button class="btn-primary" onclick="executeExport()">Download</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Data Check Modal（フェーズX）— フライトに含まれる空港/機材のうち
+     データセット（AP / AIRCRAFT_CANONICAL_TABLE）に無いものを洗い出す＋空港の収録チェック。 -->
+<div class="modal-overlay" id="dataCheckOverlay" onclick="if(event.target===this)closeDataCheck()">
+  <div class="modal">
+    <div class="modal-head">
+      <h3>🩺 Data check</h3>
+      <button class="btn-close" onclick="closeDataCheck()">✕</button>
+    </div>
+    <div class="modal-body">
+      <p class="dc-intro">
+        Airports and aircraft in your log that aren't in the dataset.
+        <strong>Unrecognized airports won't appear on the map</strong> and are left out of the
+        Domestic / International and country counts. You can add any missing airport yourself
+        with the <strong>+ Add</strong> button next to it.
+      </p>
+
+      <div class="dc-section-title">Unrecognized airports</div>
+      <div class="dc-list" id="dcAirports"></div>
+
+      <div class="dc-section-title">Unrecognized aircraft</div>
+      <div class="dc-list" id="dcAircraft"></div>
+
+      <div class="dc-section-title">Check an airport</div>
+      <div class="dc-lookup">
+        <input type="text" id="dcLookupInput" class="dc-lookup-input"
+               placeholder="ICAO / IATA / city  —  e.g. HND, RJTT, Zurich"
+               oninput="dataCheckLookup()" autocomplete="off" spellcheck="false">
+        <div class="dc-lookup-result" id="dcLookupResult"></div>
+      </div>
+
+      <div class="modal-actions">
+        <button class="btn-primary" onclick="closeDataCheck()">Done</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 3D Globe Overlay -->
+<div class="globe-overlay" id="globeOverlay" onclick="if(event.target===this)closeGlobe()">
+  <div class="globe-panel">
+    <div class="globe-header">
+      <h3>🌏 3D Globe</h3>
+      <div class="globe-header-actions">
+        <button class="globe-rotate-btn" id="globeRotateBtn" onclick="toggleGlobeRotate()" title="Pause rotation" aria-label="Pause rotation">⏸</button>
+        <button class="btn-close" onclick="closeGlobe()">✕</button>
+      </div>
+    </div>
+    <div id="globeContainer"></div>
+  </div>
+</div>
+
+<!-- Expanded 2D Map Overlay -->
+<div class="map-overlay" id="mapOverlay" onclick="if(event.target===this)closeMapExpanded()">
+  <div class="map-panel">
+    <div class="map-panel-header">
+      <h3>🗺️ Route Map</h3>
+      <button class="btn-close" onclick="closeMapExpanded()">✕</button>
+    </div>
+    <div id="flightMapExpanded"></div>
+  </div>
+</div>
+
+<!-- Continents Doughnut Expanded Overlay -->
+<div class="continents-overlay" id="continentsOverlay" onclick="if(event.target===this)closeContinentsExpanded()">
+  <div class="continents-panel">
+    <div class="continents-panel-header">
+      <h3>🌍 Continents</h3>
+      <button class="btn-close" onclick="closeContinentsExpanded()">✕</button>
+    </div>
+    <div class="continents-panel-body">
+      <canvas id="continentChartLarge"></canvas>
+    </div>
+  </div>
+</div>
+
+<!-- Year Chart Expanded Overlay -->
+<div class="chart-overlay" id="yearOverlay" onclick="if(event.target===this)closeYearExpanded()">
+  <div class="chart-panel">
+    <div class="chart-panel-header">
+      <h3>🗓️ Flights per Year</h3>
+      <button class="btn-close" onclick="closeYearExpanded()">✕</button>
+    </div>
+    <div class="chart-panel-body">
+      <canvas id="yearChartLarge"></canvas>
+    </div>
+  </div>
+</div>
+
+<!-- Month Chart Expanded Overlay -->
+<div class="chart-overlay" id="monthOverlay" onclick="if(event.target===this)closeMonthExpanded()">
+  <div class="chart-panel">
+    <div class="chart-panel-header">
+      <h3>📅 Flights per Month</h3>
+      <button class="btn-close" onclick="closeMonthExpanded()">✕</button>
+    </div>
+    <div class="chart-panel-body">
+      <canvas id="monthChartLarge"></canvas>
+    </div>
+  </div>
+</div>
+
+<!-- Weekday Chart Expanded Overlay -->
+<div class="chart-overlay" id="weekdayOverlay" onclick="if(event.target===this)closeWeekdayExpanded()">
+  <div class="chart-panel">
+    <div class="chart-panel-header">
+      <h3>📆 Flights per Weekday</h3>
+      <button class="btn-close" onclick="closeWeekdayExpanded()">✕</button>
+    </div>
+    <div class="chart-panel-body">
+      <canvas id="weekdayChartLarge"></canvas>
+    </div>
+  </div>
+</div>
+
+<!-- Top Flights Expanded Overlay（個別フライトを全件、ソート可能） -->
+<div class="flights-overlay" id="flightsOverlay" onclick="if(event.target===this)closeFlightsExpanded()">
+  <div class="flights-panel">
+    <div class="flights-panel-header">
+      <h3>⏱️ Top Flights by Time</h3>
+      <div class="expanded-sort">
+        <label class="expanded-sort-label" for="flightsSort">Sort</label>
+        <select id="flightsSort" class="expanded-sort-select" onchange="onFlightsSortChange()">
+          <option value="time-desc">Time ▾ (Longest)</option>
+          <option value="time-asc">Time ▴ (Shortest)</option>
+          <option value="date-desc">Date ▾ (Newest)</option>
+          <option value="date-asc">Date ▴ (Oldest)</option>
+        </select>
+      </div>
+      <button class="btn-close" onclick="closeFlightsExpanded()">✕</button>
+    </div>
+    <div class="flights-panel-body" id="flightsExpandedScroll"></div>
+    <div class="flights-panel-footer">
+      <div><div class="total-label" id="flightsExpandedTotal">—</div><div class="total-sub">total flights</div></div>
+    </div>
+  </div>
+</div>
+
+<!-- Flight Log フルスクリーン用のバックドロップ（カード自体が position:fixed になる） -->
+<div class="fullscreen-backdrop" id="fullscreenBackdrop" onclick="toggleFlightLogFullscreen()"></div>
+
+<!-- Expanded Overlay -->
+<div class="expanded-overlay" id="expandedOverlay" onclick="if(event.target===this)closeExpanded()">
+  <div class="expanded-panel">
+    <div class="expanded-header">
+      <h3 id="expandedTitle">—</h3>
+      <div class="expanded-sort">
+        <label class="expanded-sort-label" for="expandedSort">Sort</label>
+        <select id="expandedSort" class="expanded-sort-select" onchange="onExpandedSortChange()">
+          <option value="count-desc">Count ▾</option>
+          <option value="count-asc">Count ▴</option>
+          <option value="time-desc" data-time-only>Time ▾</option>
+          <option value="time-asc"  data-time-only>Time ▴</option>
+          <option value="name-asc">Name A–Z</option>
+          <option value="name-desc">Name Z–A</option>
+        </select>
+      </div>
+      <button class="btn-close" onclick="closeExpanded()">✕</button>
+    </div>
+    <div class="expanded-scroll" id="expandedScroll"></div>
+    <div class="expanded-footer">
+      <div><div class="total-label" id="expandedTotal">—</div><div class="total-sub" id="expandedSub">—</div></div>
+    </div>
+  </div>
+</div>
+
+<!-- Bulk Import Modal -->
+<!-- 外側クリックでは閉じない（入力中の誤クリックでデータ消失を防ぐ）。
+     閉じる手段は ✕ ボタンと ESC キーのみ。 -->
+<div class="modal-overlay" id="bulkOverlay">
+  <div class="modal modal-wide">
+    <div class="modal-head">
+      <h3>📥 Bulk Import</h3>
+      <button class="btn-close" onclick="closeBulk()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="modal-tabs">
+        <button class="modal-tab active" onclick="switchBulkTab('flights',this)">✈️ Flights</button>
+        <button class="modal-tab" onclick="switchBulkTab('airports',this)">🛬 Airports</button>
+      </div>
+
+      <!-- Flights tab -->
+      <div id="bulkFlightsTab">
+        <!-- 各行 = [塗りボタン] + [OR(gray) + アクション(青・クリック可)]。
+             PASTE はクリックでクリップボードを自動ペースト（pasteFromClipboard）。 -->
+        <div class="file-upload-row">
+          <label class="file-upload-btn" for="csvFileInput">📂 Select CSV file</label>
+          <input type="file" id="csvFileInput" accept=".csv,.tsv,.txt" style="display:none;" onchange="loadCSVFile(this)">
+          <span class="file-upload-name" id="csvFileName"></span>
+          <span class="sample-or-group">
+            <span class="sample-or-prefix">or</span><button type="button" class="sample-or-btn" onclick="pasteFromClipboard()">Paste ↓</button>
+          </span>
+        </div>
+        <div class="sample-row">
+          <button type="button" class="btn-sample" onclick="loadSampleFlights()">👀 Load sample data</button>
+          <span class="sample-or-group">
+            <span class="sample-or-prefix">or</span><button type="button" class="sample-or-btn" onclick="downloadSampleFlights()">Download sample CSV ↓</button>
+          </span>
+        </div>
+        <div class="bulk-textarea-wrap">
+          <textarea class="bulk-textarea" id="bulkCSV" placeholder="# IF_FlightLog v1&#10;date,dep,arr,aircraft,airline,duration&#10;2025-06-01,RJTT,RJOO,B772,ANA,1h15m&#10;2025/6/2,rjoo,rjtt,a359,Japan Airlines,1:10&#10;25-06-03,RJTT,RJCC,b77w,ANA,90m&#10;&#10;# Lines starting with # are comments (ignored)&#10;# Date, time, case, and quotes are auto-corrected&#10;# Separators: comma (,) / Japanese comma (、) / TAB are all accepted" oninput="previewBulk()"></textarea>
+          <button type="button" class="bulk-clear-btn" id="bulkClearBtn" onclick="clearBulkInput('flight')" style="display:none;" title="Clear input">✕ Clear</button>
+        </div>
+        <div class="bulk-hint">
+          <strong>Format (6 columns):</strong> <code>date,dep,arr,aircraft,airline,duration</code><br>
+          Separators: <code>,</code> / <code>、</code> / TAB — all OK<br>
+          Date: <code>2025-06-01</code> <code>2025/6/1</code> <code>25-06-01</code> <code>20250601</code> — all OK<br>
+          Time: <code>1h30m</code> <code>1:30</code> <code>90m</code> <code>1h30</code> <code>1.5h</code> — all OK<br>
+          📋 Paste an exported CSV directly (comment lines <code>#</code> and header are auto-skipped)<br>
+          🔁 Duplicate flights (same date, route, aircraft, airline, time) are removed automatically
+        </div>
+        <div class="bulk-count" id="bulkCount" style="display:none;"></div>
+        <div class="bulk-preview" id="bulkPreview" style="display:none;"></div>
+      </div>
+
+      <!-- Airports tab（Flights タブと同じデザイン・機能。サンプルは簡易・DL 主目的） -->
+      <div id="bulkAirportsTab" style="display:none;">
+        <div class="file-upload-row">
+          <label class="file-upload-btn" for="apCsvFileInput">📂 Select CSV file</label>
+          <input type="file" id="apCsvFileInput" accept=".csv,.tsv,.txt" style="display:none;" onchange="loadCSVFile(this,'airport')">
+          <span class="file-upload-name" id="apCsvFileName"></span>
+          <span class="sample-or-group">
+            <span class="sample-or-prefix">or</span><button type="button" class="sample-or-btn" onclick="pasteFromClipboard('airport')">Paste ↓</button>
+          </span>
+        </div>
+        <div class="sample-row">
+          <button type="button" class="btn-sample" onclick="loadSampleAirports()">👀 Load sample data</button>
+          <span class="sample-or-group">
+            <span class="sample-or-prefix">or</span><button type="button" class="sample-or-btn" onclick="downloadSampleAirports()">Download sample CSV ↓</button>
+          </span>
+        </div>
+        <div class="bulk-textarea-wrap">
+          <textarea class="bulk-textarea" id="bulkAirportCSV" placeholder="# IF_Airports v1&#10;# Quick mode: just ICAO codes (auto-resolved from built-in DB of 190 airports)&#10;RJNK&#10;RKPC&#10;KJFK&#10;&#10;# Manual mode: for airports not in the DB&#10;icao,lat,lng,city,country,continent&#10;XXXX,35.123,139.456,CityName,Country,Asia" oninput="previewAirports()"></textarea>
+          <button type="button" class="bulk-clear-btn" id="apBulkClearBtn" onclick="clearBulkInput('airport')" style="display:none;" title="Clear input">✕ Clear</button>
+        </div>
+        <div class="bulk-hint">
+          <strong>Quick mode:</strong> enter ICAO codes only → auto-resolved from built-in DB (190 airports)<br>
+          <strong>Manual mode (6 columns):</strong> <code>icao,lat,lng,city,country,continent</code> — for airports not in the DB<br>
+          Separators: <code>,</code> / <code>、</code> / TAB — all OK<br>
+          📋 Lines starting with <code>#</code> are comments (ignored)
+        </div>
+        <div class="bulk-count" id="apBulkCount" style="display:none;"></div>
+        <div class="bulk-preview" id="apBulkPreview" style="display:none;"></div>
+      </div>
+
+      <div class="modal-actions" style="margin-top:16px;">
+        <button class="btn-outline" onclick="closeBulk()">Cancel</button>
+        <button class="btn-primary" id="bulkImportBtn" onclick="executeBulkImport()">Import Flights</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Add Flight Modal -->
+<!-- 外側クリックでは閉じない（入力中の誤クリックでデータ消失を防ぐ）。
+     閉じる手段は ✕ ボタンと ESC キーのみ。 -->
+<div class="modal-overlay" id="modalOverlay">
+  <div class="modal">
+    <div class="modal-head">
+      <h3>✈️ Add New Flight</h3>
+      <button class="btn-close" onclick="closeModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-row">
+        <div class="form-group">
+          <span class="form-label">Date</span>
+          <input type="date" class="form-input" id="fDate">
+        </div>
+        <div class="form-group">
+          <span class="form-label">Flight Time</span>
+          <div class="flight-time-input">
+            <div class="ac-wrap">
+              <input class="form-input" id="fTimeH" inputmode="numeric" placeholder="0" autocomplete="off" oninput="acUpdate('fTimeH','time-h')" onfocus="acUpdate('fTimeH','time-h')" onblur="setTimeout(()=>acHide('fTimeH'),150)">
+              <div class="ac-list" id="fTimeH-ac"></div>
+            </div>
+            <span class="time-unit">h</span>
+            <div class="ac-wrap">
+              <input class="form-input" id="fTimeM" inputmode="numeric" placeholder="0" autocomplete="off" oninput="acUpdate('fTimeM','time-m')" onfocus="acUpdate('fTimeM','time-m')" onblur="setTimeout(()=>acHide('fTimeM'),150)">
+              <div class="ac-list" id="fTimeM-ac"></div>
+            </div>
+            <span class="time-unit">m</span>
+          </div>
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group ac-wrap">
+          <span class="form-label">Departure (ICAO)</span>
+          <input class="form-input" id="fDep" placeholder="RJTT" maxlength="4" style="text-transform:uppercase;" autocomplete="off" oninput="acUpdate('fDep','airport')" onfocus="acUpdate('fDep','airport')" onblur="setTimeout(()=>acHide('fDep'),150)">
+          <div class="ac-list" id="fDep-ac"></div>
+        </div>
+        <div class="form-group ac-wrap">
+          <span class="form-label">Arrival (ICAO)</span>
+          <input class="form-input" id="fArr" placeholder="RJOO" maxlength="4" style="text-transform:uppercase;" autocomplete="off" oninput="acUpdate('fArr','airport')" onfocus="acUpdate('fArr','airport')" onblur="setTimeout(()=>acHide('fArr'),150)">
+          <div class="ac-list" id="fArr-ac"></div>
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group ac-wrap">
+          <span class="form-label">Aircraft</span>
+          <input class="form-input" id="fAircraft" placeholder="B772" style="text-transform:uppercase;" autocomplete="off" oninput="acUpdate('fAircraft','aircraft')" onfocus="acUpdate('fAircraft','aircraft')" onblur="setTimeout(()=>acHide('fAircraft'),150)">
+          <div class="ac-list" id="fAircraft-ac"></div>
+        </div>
+        <div class="form-group ac-wrap">
+          <span class="form-label">Airline</span>
+          <input class="form-input" id="fAirline" placeholder="ANA" autocomplete="off" oninput="acUpdate('fAirline','airline')" onfocus="acUpdate('fAirline','airline')" onblur="setTimeout(()=>acHide('fAirline'),150)">
+          <div class="ac-list" id="fAirline-ac"></div>
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn-outline" onclick="closeModal()">Cancel</button>
+        <button class="btn-primary" onclick="addFlight()">Add Flight</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Add Airport モーダル（Data check の「+ Add」から開く。少数の手動追加向けに Add New Flight と同じ作法）。 -->
+<div class="modal-overlay" id="addAirportOverlay" onclick="if(event.target===this)closeAddAirport()">
+  <div class="modal">
+    <div class="modal-head">
+      <h3>📍 Add Airport</h3>
+      <button class="btn-close" onclick="closeAddAirport()">✕</button>
+    </div>
+    <div class="modal-body">
+      <p class="dc-intro">
+        Add an airport that isn't in the dataset so it shows on the map and counts toward
+        Domestic / International and country totals. Saved to this device.
+      </p>
+      <div class="form-row">
+        <div class="form-group">
+          <span class="form-label">ICAO</span>
+          <input class="form-input" id="aaIcao" placeholder="RJRT" maxlength="4" style="text-transform:uppercase;" autocomplete="off" spellcheck="false" oninput="_updateAaCoordLink()">
+        </div>
+        <div class="form-group">
+          <span class="form-label">Continent</span>
+          <select class="form-input" id="aaContinent">
+            <option value="Asia">Asia</option>
+            <option value="Europe">Europe</option>
+            <option value="North America">North America</option>
+            <option value="South America">South America</option>
+            <option value="Africa">Africa</option>
+            <option value="Oceania">Oceania</option>
+            <option value="Antarctica">Antarctica</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <span class="form-label">Latitude</span>
+          <input class="form-input" id="aaLat" inputmode="decimal" placeholder="35.765" autocomplete="off" spellcheck="false">
+        </div>
+        <div class="form-group">
+          <span class="form-label">Longitude</span>
+          <input class="form-input" id="aaLng" inputmode="decimal" placeholder="140.386" autocomplete="off" spellcheck="false">
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <span class="form-label">City</span>
+          <input class="form-input" id="aaCity" placeholder="Tateyama" autocomplete="off" spellcheck="false" oninput="_updateAaCoordLink()">
+        </div>
+        <div class="form-group">
+          <span class="form-label">Country</span>
+          <input class="form-input" id="aaCountry" placeholder="Japan" autocomplete="off" spellcheck="false">
+        </div>
+      </div>
+      <p class="aa-hint">
+        Need the coordinates? <a id="aaCoordLink" href="https://www.openstreetmap.org/" target="_blank" rel="noopener">🔎 Look them up on OpenStreetMap</a> — copy the decimal latitude / longitude.
+      </p>
+      <div class="modal-actions">
+        <button class="btn-outline" onclick="closeAddAirport()">Cancel</button>
+        <button class="btn-primary" onclick="submitAddAirport()">Add Airport</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== ADVANCED FILTERS（フェーズY-2） ==================== -->
+<!-- 上=プリセット（複数軸コンボのワンクリック） / 区切り線 / 下=新軸フィルタ。
+     新軸は既存のチップ機構（FILTER_DEFS＋change 委譲＋_renderFilterMenu）をそのまま流用し、
+     ここのコンテナ（filter*Menu）に .chip-menu-item を描画する。開閉は既存オーバーレイ作法。 -->
+<!-- 背景クリックでは閉じない（Add Flight と同様・誤操作でフィルタ設定を失わないため）。✕ / ESC / Done で閉じる。 -->
+<div class="modal-overlay" id="advFilterOverlay">
+  <div class="modal modal-wide">
+    <div class="modal-head">
+      <h3>⚙️ Advanced filters</h3>
+      <button class="btn-close" onclick="closeAdvancedFilters()">✕</button>
+    </div>
+    <div class="modal-body adv-modal-body">
+      <div class="adv-section-label">Presets</div>
+      <div class="adv-presets" id="advPresets"></div>
+      <hr class="adv-divider">
+      <!-- Saved（ユーザー保存プリセット・Y-2 増分3）。空なら＋ボタン。✏️ で編集モード→各ボタンの✕で削除。 -->
+      <div class="adv-saved-head">
+        <span class="adv-section-label">Saved</span>
+        <button type="button" class="adv-saved-edit" id="advSavedEdit" onclick="toggleSavedEdit()" style="display:none;" title="Edit saved presets">✏️ Edit</button>
+      </div>
+      <div class="adv-presets" id="advSaved"></div>
+      <hr class="adv-divider">
+      <!-- カテゴリ分け（Y-2 パネル再構成）。バーのフィルタもここに複製（data 属性で同期）。
+           各チップは .filter-chip-multi 流用＝toggleFilterMenu/_renderFilterMenu/change 委譲がそのまま効く。 -->
+      <div class="adv-section-label">Date</div>
+      <div class="adv-chips">
+        <div class="filter-chip filter-chip-multi" data-chip="year">
+          <button type="button" class="chip-btn" onclick="toggleFilterMenu('year', event)">
+            <span>🗓️</span><span class="chip-label" data-label="year">All Years</span><span class="chip-arrow">▾</span>
+          </button><div class="chip-menu" data-menu="year"></div>
+        </div>
+        <div class="filter-chip filter-chip-multi" data-chip="month">
+          <button type="button" class="chip-btn" onclick="toggleFilterMenu('month', event)">
+            <span>📅</span><span class="chip-label" data-label="month">All Months</span><span class="chip-arrow">▾</span>
+          </button><div class="chip-menu" data-menu="month"></div>
+        </div>
+        <div class="filter-chip filter-chip-multi" data-chip="weekday">
+          <button type="button" class="chip-btn" onclick="toggleFilterMenu('weekday', event)">
+            <span>📆</span><span class="chip-label" data-label="weekday">All Weekdays</span><span class="chip-arrow">▾</span>
+          </button><div class="chip-menu" data-menu="weekday"></div>
+        </div>
+      </div>
+      <hr class="adv-divider">
+      <div class="adv-section-label">Airport</div>
+      <div class="adv-chips">
+        <div class="filter-chip filter-chip-multi" data-chip="airports">
+          <button type="button" class="chip-btn" onclick="toggleFilterMenu('airports', event)">
+            <span>📍</span><span class="chip-label" data-label="airports">All Airports</span><span class="chip-arrow">▾</span>
+          </button><div class="chip-menu" data-menu="airports"></div>
+        </div>
+        <div class="filter-chip filter-chip-multi" data-chip="depAirport">
+          <button type="button" class="chip-btn" onclick="toggleFilterMenu('depAirport', event)">
+            <span>🛫</span><span class="chip-label" data-label="depAirport">All Dep Airports</span><span class="chip-arrow">▾</span>
+          </button><div class="chip-menu" data-menu="depAirport"></div>
+        </div>
+        <div class="filter-chip filter-chip-multi" data-chip="arrAirport">
+          <button type="button" class="chip-btn" onclick="toggleFilterMenu('arrAirport', event)">
+            <span>🛬</span><span class="chip-label" data-label="arrAirport">All Arr Airports</span><span class="chip-arrow">▾</span>
+          </button><div class="chip-menu" data-menu="arrAirport"></div>
+        </div>
+      </div>
+      <hr class="adv-divider">
+      <div class="adv-section-label">Cities</div>
+      <div class="adv-chips">
+        <div class="filter-chip filter-chip-multi" data-chip="city">
+          <button type="button" class="chip-btn" onclick="toggleFilterMenu('city', event)">
+            <span>🏙️</span><span class="chip-label" data-label="city">All Cities</span><span class="chip-arrow">▾</span>
+          </button><div class="chip-menu" data-menu="city"></div>
+        </div>
+        <div class="filter-chip filter-chip-multi" data-chip="depCity">
+          <button type="button" class="chip-btn" onclick="toggleFilterMenu('depCity', event)">
+            <span>🛫</span><span class="chip-label" data-label="depCity">All Dep Cities</span><span class="chip-arrow">▾</span>
+          </button><div class="chip-menu" data-menu="depCity"></div>
+        </div>
+        <div class="filter-chip filter-chip-multi" data-chip="arrCity">
+          <button type="button" class="chip-btn" onclick="toggleFilterMenu('arrCity', event)">
+            <span>🛬</span><span class="chip-label" data-label="arrCity">All Arr Cities</span><span class="chip-arrow">▾</span>
+          </button><div class="chip-menu" data-menu="arrCity"></div>
+        </div>
+      </div>
+      <hr class="adv-divider">
+      <div class="adv-section-label">Countries / Regions</div>
+      <div class="adv-chips">
+        <div class="filter-chip filter-chip-multi" data-chip="country">
+          <button type="button" class="chip-btn" onclick="toggleFilterMenu('country', event)">
+            <span>🏞️</span><span class="chip-label" data-label="country">All Countries/Regions</span><span class="chip-arrow">▾</span>
+          </button><div class="chip-menu" data-menu="country"></div>
+        </div>
+        <div class="filter-chip filter-chip-multi" data-chip="depCountry">
+          <button type="button" class="chip-btn" onclick="toggleFilterMenu('depCountry', event)">
+            <span>🛫</span><span class="chip-label" data-label="depCountry">All Dep Countries</span><span class="chip-arrow">▾</span>
+          </button><div class="chip-menu" data-menu="depCountry"></div>
+        </div>
+        <div class="filter-chip filter-chip-multi" data-chip="arrCountry">
+          <button type="button" class="chip-btn" onclick="toggleFilterMenu('arrCountry', event)">
+            <span>🛬</span><span class="chip-label" data-label="arrCountry">All Arr Countries</span><span class="chip-arrow">▾</span>
+          </button><div class="chip-menu" data-menu="arrCountry"></div>
+        </div>
+        <div class="filter-chip filter-chip-multi" data-chip="scope">
+          <button type="button" class="chip-btn" onclick="toggleFilterMenu('scope', event)" title="Domestic = same country/region, International = crosses borders">
+            <span>🌐</span><span class="chip-label" data-label="scope">All Flights</span><span class="chip-arrow">▾</span>
+          </button><div class="chip-menu" data-menu="scope"></div>
+        </div>
+      </div>
+      <hr class="adv-divider">
+      <div class="adv-section-label">Continents</div>
+      <div class="adv-chips">
+        <div class="filter-chip filter-chip-multi" data-chip="continent">
+          <button type="button" class="chip-btn" onclick="toggleFilterMenu('continent', event)">
+            <span>🗺️</span><span class="chip-label" data-label="continent">All Continents</span><span class="chip-arrow">▾</span>
+          </button><div class="chip-menu" data-menu="continent"></div>
+        </div>
+        <div class="filter-chip filter-chip-multi" data-chip="depContinent">
+          <button type="button" class="chip-btn" onclick="toggleFilterMenu('depContinent', event)">
+            <span>🌍</span><span class="chip-label" data-label="depContinent">All Dep Continents</span><span class="chip-arrow">▾</span>
+          </button><div class="chip-menu" data-menu="depContinent"></div>
+        </div>
+        <div class="filter-chip filter-chip-multi" data-chip="arrContinent">
+          <button type="button" class="chip-btn" onclick="toggleFilterMenu('arrContinent', event)">
+            <span>🌏</span><span class="chip-label" data-label="arrContinent">All Arr Continents</span><span class="chip-arrow">▾</span>
+          </button><div class="chip-menu" data-menu="arrContinent"></div>
+        </div>
+        <div class="filter-chip filter-chip-multi" data-chip="contScope">
+          <button type="button" class="chip-btn" onclick="toggleFilterMenu('contScope', event)">
+            <span>🧭</span><span class="chip-label" data-label="contScope">All Cont. Scope</span><span class="chip-arrow">▾</span>
+          </button><div class="chip-menu" data-menu="contScope"></div>
+        </div>
+      </div>
+      <hr class="adv-divider">
+      <div class="adv-section-label">Aircraft / Airline</div>
+      <div class="adv-chips">
+        <div class="filter-chip filter-chip-multi" data-chip="aircraft">
+          <button type="button" class="chip-btn" onclick="toggleFilterMenu('aircraft', event)">
+            <span>✈️</span><span class="chip-label" data-label="aircraft">All Aircraft</span><span class="chip-arrow">▾</span>
+          </button><div class="chip-menu" data-menu="aircraft"></div>
+        </div>
+        <div class="filter-chip filter-chip-multi" data-chip="airline">
+          <button type="button" class="chip-btn" onclick="toggleFilterMenu('airline', event)">
+            <span>🏢</span><span class="chip-label" data-label="airline">All Airlines</span><span class="chip-arrow">▾</span>
+          </button><div class="chip-menu" data-menu="airline"></div>
+        </div>
+      </div>
+      <hr class="adv-divider">
+      <div class="adv-section-label">Time</div>
+      <div class="adv-chips">
+        <div class="filter-chip filter-chip-multi" data-chip="duration">
+          <button type="button" class="chip-btn" onclick="toggleFilterMenu('duration', event)">
+            <span>⏱️</span><span class="chip-label" data-label="duration">All Durations</span><span class="chip-arrow">▾</span>
+          </button><div class="chip-menu" data-menu="duration"></div>
+        </div>
+      </div>
+      <div class="modal-actions adv-actions">
+        <button class="btn-outline" onclick="clearFilters()">✕ Clear all</button>
+        <button class="btn-outline btn-save-preset" onclick="openSavePreset()">💾 Save preset</button>
+        <button class="btn-primary" onclick="closeAdvancedFilters()">Done</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Save Preset naming window（Y-2 増分3）— 高度パネルの上に開く。現在の絞り込みを名前付きで保存。 -->
+<!-- 背景クリックでは閉じない（高度パネルと同様）。✕ / ESC / Cancel で閉じる。 -->
+<div class="modal-overlay" id="savePresetOverlay">
+  <div class="modal">
+    <div class="modal-head">
+      <h3>💾 Save preset</h3>
+      <button class="btn-close" onclick="closeSavePreset()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-group full">
+        <span class="form-label">Preset name</span>
+        <input class="form-input" id="savePresetName" maxlength="40" placeholder="e.g. Widebody international"
+               autocomplete="off" spellcheck="false" onkeydown="if(event.key==='Enter')confirmSavePreset()">
+      </div>
+      <p class="dc-intro" id="savePresetSummary" style="margin-top:12px;"></p>
+      <div class="modal-actions">
+        <button class="btn-outline" onclick="closeSavePreset()">Cancel</button>
+        <button class="btn-primary" onclick="confirmSavePreset()">Save</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== HERO ==================== -->
+<div class="hero">
+  <div class="hero-inner">
+    <div class="hero-top">
+      <div class="hero-brand">
+        <!-- 無限記号（∞）の SVG ロゴ。絵文字（♾️）はプラットフォームごとに描画が異なるので
+             インライン SVG で全環境で同一の見た目を保証する。色は CSS の color プロパティで制御。 -->
+        <div class="hero-logo" aria-label="Infinite Flight">
+          <svg viewBox="0 0 100 50" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+            <path d="M 50 25 C 70 5 95 5 95 25 C 95 45 70 45 50 25 C 30 5 5 5 5 25 C 5 45 30 45 50 25 Z"
+                  fill="none" stroke="currentColor" stroke-width="10"
+                  stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </div>
+        <div class="hero-title">Infinite <span>Flight</span> Dashboard</div>
+      </div>
+      <!-- フェーズS（2026-07-01 ヘッダー再編）：色ボタンは Add だけに集約。
+           データ操作は ≡（機能メニュー）、テーマ等は ⚙️（設定メニュー）へドロップダウンで畳む。
+           保存ステータスは「ボタン」から ≡ 内の「表示行」に格下げ（旧 F-007 の謎ボタン解消）。 -->
+      <div class="hero-actions">
+        <!-- ① 主役 CTA：唯一の塗りつぶしボタン -->
+        <button class="btn-primary" id="btnHeaderAdd" onclick="openModal()">
+          <span style="font-size:16px">+</span> Add Flight
+        </button>
+
+        <!-- ② 機能メニュー ≡（検索 / データ操作：Import / Export / Clear） -->
+        <div class="header-menu-wrap" id="dataMenuWrap">
+          <button class="header-icon-btn" id="btnDataMenu" onclick="toggleHeaderMenu('data', event)"
+                  title="Menu" aria-haspopup="true" aria-expanded="false" aria-controls="dataMenu">
+            <!-- ≡ は文字だと縦中央がずれるので CSS で 3 本線を描画（全環境で正確に中央寄せ） -->
+            <span class="header-hamburger" aria-hidden="true"></span>
+          </button>
+          <div class="header-menu" id="dataMenu" role="menu" aria-labelledby="btnDataMenu">
+            <!-- 検索：Flight Log の検索欄へジャンプしてフォーカス -->
+            <button class="header-menu-item" role="menuitem" onclick="focusFlightSearch()">
+              <span class="header-menu-ico" aria-hidden="true">🔍</span> Search flights
+            </button>
+            <!-- Data check（フェーズX）：未収録の空港/機材を洗い出す窓を開く -->
+            <button class="header-menu-item" role="menuitem" onclick="openDataCheck()">
+              <span class="header-menu-ico" aria-hidden="true">🩺</span> Data check
+            </button>
+            <div class="header-menu-divider" role="separator"></div>
+            <button class="header-menu-item" id="btnHeaderImport" role="menuitem"
+                    onclick="closeHeaderMenus(); openBulk()">
+              <span class="header-menu-ico" aria-hidden="true">📥</span> Import
+            </button>
+            <button class="header-menu-item" id="btnExport" role="menuitem"
+                    onclick="closeHeaderMenus(); openExport()">
+              <span class="header-menu-ico" aria-hidden="true">📤</span> Export
+            </button>
+            <button class="header-menu-item is-danger" id="btnClearAllHeader" role="menuitem"
+                    onclick="closeHeaderMenus(); confirmDeleteAll()" title="Delete all flights">
+              <span class="header-menu-ico" aria-hidden="true">🗑</span> Clear all
+            </button>
+          </div>
+        </div>
+
+        <!-- ③ 設定メニュー ⚙️（テーマ。将来：言語切替・バナー表示など） -->
+        <div class="header-menu-wrap" id="settingsMenuWrap">
+          <button class="header-icon-btn" id="btnSettingsMenu" onclick="toggleHeaderMenu('settings', event)"
+                  title="Settings" aria-haspopup="true" aria-expanded="false" aria-controls="settingsMenu">
+            <span class="header-icon-glyph" aria-hidden="true">⚙️</span>
+          </button>
+          <div class="header-menu" id="settingsMenu" role="menu" aria-labelledby="btnSettingsMenu">
+            <div class="header-menu-label">Theme</div>
+            <button class="header-menu-item is-choice" data-theme-opt="auto" role="menuitemradio"
+                    onclick="setTheme('auto')">
+              <span class="header-menu-ico" aria-hidden="true">🔄</span> Auto <span class="header-menu-sub">(follow OS)</span>
+              <span class="header-menu-check" aria-hidden="true">✓</span>
+            </button>
+            <button class="header-menu-item is-choice" data-theme-opt="light" role="menuitemradio"
+                    onclick="setTheme('light')">
+              <span class="header-menu-ico" aria-hidden="true">☀️</span> Light
+              <span class="header-menu-check" aria-hidden="true">✓</span>
+            </button>
+            <button class="header-menu-item is-choice" data-theme-opt="dark" role="menuitemradio"
+                    onclick="setTheme('dark')">
+              <span class="header-menu-ico" aria-hidden="true">🌙</span> Dark
+              <span class="header-menu-check" aria-hidden="true">✓</span>
+            </button>
+            <div class="header-menu-divider" id="settingsSaveDivider" role="separator"></div>
+            <!-- THEME と同様にセクション見出しを付ける（フェーズX フィードバック） -->
+            <div class="header-menu-label" id="settingsStatusLabel">Status</div>
+            <!-- 保存ステータス（設定側へ移設）：通常は緑✓ Auto-saved、保存不可は赤！/○。
+                 クリックで従来の詳細ポップアップ。状態クラスは _setSaveStatus が #saveStatus に付与。 -->
+            <button class="header-menu-item is-status" id="saveStatus" role="menuitem"
+                    onclick="closeHeaderMenus(); openSaveStatusInfo()" title="Click for details">
+              <span class="save-status-icon header-menu-ico" id="saveStatusIcon" aria-hidden="true">✓</span>
+              <span id="saveStatusLabel">Auto-saved</span>
+            </button>
+            <!-- データ収録ステータス（フェーズX）：全部収録済みなら緑✓、未収録があれば ⚠️ N。
+                 クリックで Data check 窓（未収録一覧＋空港チェック検索）を開く。
+                 件数は _updateDataStatus が refreshAll のたびに更新。
+                 ✓ を緑にするため saveStatusIcon と同じ save-status-icon クラスを付与（実証済みの緑ルールを共有）。 -->
+            <button class="header-menu-item is-status" id="dataStatus" role="menuitem"
+                    onclick="closeHeaderMenus(); openDataCheck()" title="Open data check">
+              <span class="save-status-icon header-menu-ico" id="dataStatusIcon" aria-hidden="true">✓</span>
+              <span id="dataStatusLabel">All data recognized</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="stats-grid" id="statsGrid"></div>
+  </div>
+</div>
+
+
+<!-- ==================== EMPTY STATE ==================== -->
+<div id="emptyState">
+  <div class="empty-card">
+    <div class="empty-icon">✈️</div>
+    <div class="empty-title">Load your flight log</div>
+    <div class="empty-sub">
+      Your flights stay on this device — never uploaded.<br>
+      Import a CSV file, or add your first flight manually.
+    </div>
+    <div class="empty-actions">
+      <button class="btn-primary" onclick="openBulk()" style="background:var(--violet);">
+        📂 Import CSV
+      </button>
+      <button class="btn-primary" onclick="openModal()">
+        <span style="font-size:16px">+</span> Add your first flight
+      </button>
+    </div>
+    <div class="empty-sample">
+      <button type="button" class="btn-sample" onclick="openSampleInBulk()">👀 Try it with sample data</button>
+    </div>
+    <div class="empty-hint">
+      📝 <strong>CSV format:</strong> <code>date,dep,arr,aircraft,airline,duration</code> (6 columns)<br>
+      🔄 <strong>Round-trip:</strong> exported files can be imported back, and edited in any text editor.<br>
+      💾 <strong>Auto-saved:</strong> entries are stored in this browser. CSV backup recommended for safety.
+    </div>
+  </div>
+</div>
+
+<!-- ==================== FILTER BAR ==================== -->
+<!-- 既定では折り畳み状態。「Filters ▾」ボタンで開閉。フィルター適用中は数値バッジで通知。 -->
+<div class="filter-bar collapsed" id="filterBar">
+  <button type="button" class="filter-toggle-btn" id="filterToggleBtn" onclick="toggleFilterBar()" title="Show / hide filters">
+    <span>Filters</span>
+    <span class="filter-active-badge" id="filterActiveBadge" style="display:none;">0</span>
+    <span class="filter-toggle-arrow">▾</span>
+  </button>
+  <!-- 折り畳み中でもフィルター適用中ならトグルの横にクリアを出す（展開中は CSS で隠し、
+       チップ群末尾の filterClear が担当）。見た目は展開時の filterClear と統一（控えめテキスト）。
+       表示制御は _syncFilterChips（active 状態）で。 -->
+  <button type="button" class="filter-clear filter-clear-collapsed" id="filterClearCollapsed" onclick="clearFilters()"
+          style="display:none;" title="Clear all filters">✕ Clear all</button>
+  <div class="filter-chips-group" id="filterChipsGroup">
+  <!-- バーの 6 チップ。同一フィルタが高度パネルにも複製されるため id ではなく data 属性で識別
+       （data-chip / data-label / data-menu ＝ フィルタキー）。JS は querySelectorAll で全インスタンスを同期。 -->
+  <div class="filter-chip filter-chip-multi" data-chip="year">
+    <button type="button" class="chip-btn" onclick="toggleFilterMenu('year', event)">
+      <span>🗓️</span>
+      <span class="chip-label" data-label="year">All Years</span>
+      <span class="chip-arrow">▾</span>
+    </button>
+    <div class="chip-menu" data-menu="year"></div>
+  </div>
+  <div class="filter-chip filter-chip-multi" data-chip="month">
+    <button type="button" class="chip-btn" onclick="toggleFilterMenu('month', event)">
+      <span>📅</span>
+      <span class="chip-label" data-label="month">All Months</span>
+      <span class="chip-arrow">▾</span>
+    </button>
+    <div class="chip-menu" data-menu="month"></div>
+  </div>
+  <!-- Weekday は高度フィルターパネルへ移設（バーは 6 チップ） -->
+  <div class="filter-chip filter-chip-multi" data-chip="airline">
+    <button type="button" class="chip-btn" onclick="toggleFilterMenu('airline', event)">
+      <span>🏢</span>
+      <span class="chip-label" data-label="airline">All Airlines</span>
+      <span class="chip-arrow">▾</span>
+    </button>
+    <div class="chip-menu" data-menu="airline"></div>
+  </div>
+  <div class="filter-chip filter-chip-multi" data-chip="aircraft">
+    <button type="button" class="chip-btn" onclick="toggleFilterMenu('aircraft', event)">
+      <span>✈️</span>
+      <span class="chip-label" data-label="aircraft">All Aircraft</span>
+      <span class="chip-arrow">▾</span>
+    </button>
+    <div class="chip-menu" data-menu="aircraft"></div>
+  </div>
+  <div class="filter-chip filter-chip-multi" data-chip="country">
+    <button type="button" class="chip-btn" onclick="toggleFilterMenu('country', event)">
+      <span>🏞️</span>
+      <span class="chip-label" data-label="country">All Countries/Regions</span>
+      <span class="chip-arrow">▾</span>
+    </button>
+    <div class="chip-menu" data-menu="country"></div>
+  </div>
+  <div class="filter-chip filter-chip-multi" data-chip="scope">
+    <button type="button" class="chip-btn" onclick="toggleFilterMenu('scope', event)" title="Domestic = same country/region, International = crosses borders">
+      <span>🌐</span>
+      <span class="chip-label" data-label="scope">All Flights</span>
+      <span class="chip-arrow">▾</span>
+    </button>
+    <div class="chip-menu" data-menu="scope"></div>
+  </div>
+    <!-- フェーズY-2：プリセット＋新軸フィルタを集約した高度パネルを開く。7 チップは維持し、
+         増える軸はここに逃がす（バーを渋滞させない）。適用中は右上に件数バッジ。 -->
+    <button type="button" class="adv-filter-btn" id="advFilterBtn" onclick="openAdvancedFilters()"
+            title="Presets &amp; advanced filters">
+      <span>⚙️</span>
+      <span class="adv-filter-btn-label">More</span>
+      <span class="adv-filter-badge" id="advFilterBadge" style="display:none;">0</span>
+    </button>
+    <span class="filter-clear" id="filterClear" onclick="clearFilters()" style="display:none;">✕ Clear all</span>
+  </div><!-- /.filter-chips-group -->
+  <!-- 一番上に戻るボタン：sticky なフィルターバーの右端に置く（スクロール中も上部に残る位置なので
+       本文の数字に被らない）。押すとヘッダー（Add / ≡ / ⚙️）まで戻る。スクロール量に応じて .show で出す。 -->
+  <button type="button" class="back-to-top" id="backToTop" onclick="scrollToTop()"
+          aria-label="Back to top" title="Back to top">↑</button>
+</div>
+
+<!-- ==================== COMPARE SECTION ==================== -->
+<!-- 任意の2年を比較。アンカーカード内のセレクタで yearA / yearB を切り替える。
+     メトリクスカード（Flights / Hours / Countries）は yoyMetrics に動的描画。
+     display:contents で yoyMetrics 自体は grid のレイアウトに影響しない。 -->
+<div class="yoy-section" id="yoySection" style="display:none;">
+  <div class="yoy-grid" id="yoyGrid">
+    <div class="yoy-card yoy-anchor">
+      <div class="yoy-label">Comparing</div>
+      <div class="yoy-compare">
+        <!-- 集合 A：年セレクタ＋月セレクタ（月は「All」も含む） -->
+        <div class="yoy-compare-row">
+          <select class="yoy-yr-select" id="compareYearA"  onchange="onCompareChange()"></select>
+          <select class="yoy-yr-select" id="compareMonthA" onchange="onCompareChange()"></select>
+        </div>
+        <span class="yoy-vs">vs</span>
+        <!-- 集合 B：同上 -->
+        <div class="yoy-compare-row">
+          <select class="yoy-yr-select" id="compareYearB"  onchange="onCompareChange()"></select>
+          <select class="yoy-yr-select" id="compareMonthB" onchange="onCompareChange()"></select>
+        </div>
+      </div>
+    </div>
+    <div id="yoyMetrics" style="display:contents;"></div>
+  </div>
+</div>
+
+<!-- ==================== MAP ==================== -->
+<div class="map-section">
+  <div class="map-card">
+    <div class="map-header">
+      <h3>🗺️ Route Map</h3>
+      <!-- 凡例（Hub / Airport / Route）— モバイル時は order:99 で 2 段目に落として中央揃え -->
+      <div class="map-legend">
+        <span><span class="dot" style="background:var(--amber)"></span> Hub</span>
+        <span><span class="dot" style="background:var(--red)"></span> Airport</span>
+        <span style="display:flex;align-items:center;gap:5px;">
+          <span style="width:20px;height:2px;background:var(--accent);border-radius:1px;opacity:0.6;"></span> Route
+        </span>
+      </div>
+      <!-- アクション（3D Globe / ⛶）— モバイル時はタイトルと同じ行（右端）に残す -->
+      <div class="map-actions">
+        <button class="map-globe-btn" onclick="openGlobe()">🌏 3D Globe</button>
+        <button class="map-expand-btn" onclick="openMapExpanded()" title="Expand">⛶</button>
+      </div>
+    </div>
+    <div id="flightMap"></div>
+  </div>
+</div>
+
+<!-- ==================== MAIN DASHBOARD ==================== -->
+<div class="main">
+
+  <!-- Aircraft & Airlines -->
+  <div class="grid-2">
+    <div class="card" id="aircraftCard">
+      <div class="card-header">
+        <div class="card-title">✈️ Top Aircraft</div>
+        <div class="card-actions">
+          <div class="toggle">
+            <button class="toggle-btn active" onclick="setView('aircraft','top5',this)">Top 5</button>
+            <button class="toggle-btn" onclick="setView('aircraft','all',this)">All</button>
+          </div>
+        </div>
+      </div>
+      <div class="bars-compact" id="aircraftBars"></div>
+    </div>
+    <div class="card" id="airlinesCard">
+      <div class="card-header">
+        <div class="card-title">🏢 Top Airlines</div>
+        <div class="card-actions">
+          <div class="toggle">
+            <button class="toggle-btn active" onclick="setView('airlines','top5',this)">Top 5</button>
+            <button class="toggle-btn" onclick="setView('airlines','all',this)">All</button>
+          </div>
+        </div>
+      </div>
+      <div class="bars-compact" id="airlinesBars"></div>
+    </div>
+  </div>
+
+  <!-- Routes & Airports -->
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">🛣️ Top Routes</div>
+        <div class="card-actions">
+          <div class="toggle">
+            <button class="toggle-btn active" onclick="setView('routes','top5',this)">Top 5</button>
+            <button class="toggle-btn" onclick="setView('routes','all',this)">All</button>
+          </div>
+        </div>
+      </div>
+      <div class="bars-compact" id="routesBars"></div>
+    </div>
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">🛬 Top Airports</div>
+        <div class="card-actions">
+          <div class="toggle">
+            <button class="toggle-btn active" onclick="setView('airports','top5',this)">Top 5</button>
+            <button class="toggle-btn" onclick="setView('airports','all',this)">All</button>
+          </div>
+        </div>
+      </div>
+      <div class="bars-compact" id="airportsBars"></div>
+    </div>
+  </div>
+
+  <!-- Geography -->
+  <div class="grid-3">
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">🌍 Continents</div>
+        <div class="card-actions">
+          <button class="card-expand-btn" onclick="openContinentsExpanded()" title="Expand to bar view">⛶</button>
+        </div>
+      </div>
+      <div class="chart-wrap"><canvas id="continentChart"></canvas></div>
+    </div>
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">🏞️ Top Countries/Regions</div>
+        <div class="card-actions">
+          <div class="toggle">
+            <button class="toggle-btn active" onclick="setView('countries','top5',this)">Top 5</button>
+            <button class="toggle-btn" onclick="setView('countries','all',this)">All</button>
+          </div>
+        </div>
+      </div>
+      <div class="bars-compact" id="countriesBars"></div>
+    </div>
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">🏙️ Top Cities</div>
+        <div class="card-actions">
+          <div class="toggle">
+            <button class="toggle-btn active" onclick="setView('cities','top5',this)">Top 5</button>
+            <button class="toggle-btn" onclick="setView('cities','all',this)">All</button>
+          </div>
+        </div>
+      </div>
+      <div class="bars-compact" id="citiesBars"></div>
+    </div>
+  </div>
+
+  <!-- Charts -->
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">🗓️ Flights per Year</div>
+        <div class="card-actions">
+          <button class="card-expand-btn" onclick="openYearExpanded()" title="Expand">⛶</button>
+        </div>
+      </div>
+      <div class="chart-wrap"><canvas id="yearChart"></canvas></div>
+    </div>
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">📅 Flights per Month</div>
+        <div class="card-actions">
+          <button class="card-expand-btn" onclick="openMonthExpanded()" title="Expand">⛶</button>
+        </div>
+      </div>
+      <div class="chart-wrap"><canvas id="monthChart"></canvas></div>
+    </div>
+  </div>
+
+  <!-- Weekday chart ＋ Top Flights by Time（半分ずつ、1 行に） -->
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">📆 Flights per Weekday</div>
+        <div class="card-actions">
+          <button class="card-expand-btn" onclick="openWeekdayExpanded()" title="Expand">⛶</button>
+        </div>
+      </div>
+      <div class="chart-wrap"><canvas id="weekdayChart"></canvas></div>
+    </div>
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">⏱️ Top Flights by Time</div>
+        <div class="card-actions">
+          <div class="toggle">
+            <button class="toggle-btn active" onclick="setTopFlightsView('longest',this)">Longest</button>
+            <button class="toggle-btn" onclick="setTopFlightsView('shortest',this)">Shortest</button>
+          </div>
+          <button class="card-expand-btn" onclick="openFlightsExpanded()" title="View all flights ranked">⛶</button>
+        </div>
+      </div>
+      <div class="bars-compact" id="topFlightsBars"></div>
+    </div>
+  </div>
+
+  <!-- Flight Log -->
+  <div class="card table-section">
+    <div class="card-header">
+      <div class="card-title">📋 Flight Log</div>
+      <div class="table-tools">
+        <div class="search-input">
+          <span style="color:var(--text-3)">🔍</span>
+          <input id="logSearch" placeholder="RJTT→RJOO  /  ANA  /  2025  /  -RJOO …" title="例：&#10;・RJTT→RJOO（路線で絞る、-/→/>/-> どれでも OK）&#10;・RJTT ANA 2025（複数キーワード AND）&#10;・RJTT -RJOO（RJTT を含むが RJOO を含まないものを抽出）" oninput="filterFlights()">
+        </div>
+        <button class="btn-danger" onclick="confirmDeleteAll()" title="Delete all flights">🗑️ Clear All</button>
+        <button class="card-expand-btn" onclick="toggleFlightLogFullscreen()" title="Expand">⛶</button>
+      </div>
+    </div>
+    <!-- Selection action bar -->
+    <div class="select-bar" id="selectBar">
+      <span class="sel-count" id="selCount">0 selected</span>
+      <button class="btn-cancel" onclick="clearSelection()">Cancel</button>
+      <button class="btn-danger-solid" onclick="confirmDeleteSelected()">🗑️ Delete Selected</button>
+    </div>
+    <div class="table-wrap">
+      <table class="ftable">
+        <thead>
+          <tr>
+            <th style="width:40px;"><input type="checkbox" class="cb" id="cbAll" onclick="toggleAll(this)"></th>
+            <th onclick="sortTable(0)"># ▾</th>
+            <th onclick="sortTable(1)">Date ▾</th>
+            <th onclick="sortTable(2)">Route ▾</th>
+            <th onclick="sortTable(3)">Aircraft ▾</th>
+            <th onclick="sortTable(4)">Airline ▾</th>
+            <th onclick="sortTable(5)">Duration ▾</th>
+            <th style="width:50px;"></th>
+          </tr>
+        </thead>
+        <tbody id="flightBody"></tbody>
+      </table>
+    </div>
+    <!-- フルスクリーン展開時にだけ表示されるサマリーフッター（CSS で制御） -->
+    <div class="flight-log-footer">
+      <span id="flightLogFooterCount">— flights</span>
+      <span style="color:var(--text-3);">·</span>
+      <span id="flightLogFooterTime">— total</span>
+    </div>
+  </div>
+
+</div>
+
+<!-- ==================== FOOTER ==================== -->
+<footer class="page-footer">
+  © 2026 Infinite Flight Dashboard <span class="app-version">v2.0</span>
+</footer>
+
+<!-- ==================== JS (load order matters) ==================== -->
+<!-- ローカル JS / CSS の ?v=YYYYMMDD は cache-busting クエリ。
+     更新時はこの値を変えれば、ブラウザは古いキャッシュを使わずに再取得する。 -->
+<!-- Data layer first (no UI deps) -->
+<!--   data/*.js は手編集する純粋データ（空港・機材・航空会社）。normalize.js / render.js より前に読む。 -->
+<script src="data/airports.js?v=20260701"></script>
+<script src="data/aircraft.js?v=20260630"></script>
+<script src="data/airlines.js?v=20260630"></script>
+<script src="data/sample.js?v=20260630c"></script>
+<script src="js/datasource.js?v=20260607c"></script>
+<script src="js/normalize.js?v=20260630"></script>
+<!-- Logic layer (depends on data layer) -->
+<script src="js/compute.js?v=20260702e"></script>
+<script src="js/parse.js?v=20260607b"></script>
+<!-- フィルタ/プリセットの宣言的モデル定義（main.js から分離）。DURATION_BUCKETS（compute.js）依存のため後、main.js の前に読む。 -->
+<script src="js/filters-config.js?v=20260703"></script>
+<!-- UI layer (depends on logic + data) -->
+<!--   render.js が共通ユーティリティ（_fmtHM / showToast / BAR_GRADIENTS 等）を
+       提供するため、必ず最初に読む。残りはこの順で OK（相互参照はグローバル経由）。 -->
+<script src="js/render.js?v=20260702b"></script>
+<script src="js/render-charts.js?v=20260630e"></script>
+<script src="js/render-map.js?v=20260630g"></script>
+<script src="js/render-table.js?v=20260528"></script>
+<!-- Wiring & init last (depends on everything) -->
+<script src="js/main.js?v=20260703"></script>
+</body>
+</html>

@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>filters-config.js テスト</title>
+<style>
+  :root{
+    --bg:#0d1520; --card:#162033; --border:#1a2744;
+    --text:#e8edf5; --text-2:#8c9bb5; --accent:#3b9eff;
+    --green:#00d68f; --red:#ff4d6a; --amber:#ffb020;
+  }
+  *{box-sizing:border-box;}
+  body{font-family:ui-monospace,'JetBrains Mono',Menlo,monospace;background:var(--bg);color:var(--text);
+       margin:0;padding:24px;line-height:1.45;}
+  h1{color:var(--accent);font-size:20px;margin:0 0 4px;}
+  .intro{color:var(--text-2);font-size:12px;margin-bottom:18px;}
+  .intro code{background:var(--card);padding:1px 5px;border-radius:3px;}
+  .summary{padding:12px 16px;border-radius:8px;font-weight:700;font-size:14px;margin:18px 0;}
+  .summary.ok  {background:rgba(0,214,143,0.12);border:1px solid var(--green);color:var(--green);}
+  .summary.fail{background:rgba(255,77,106,0.12);border:1px solid var(--red);  color:var(--red);}
+  .group{margin:14px 0;background:var(--card);border:1px solid var(--border);border-radius:8px;
+         padding:10px 14px;}
+  .group h2{font-size:13px;color:var(--text-2);margin:0 0 6px;text-transform:uppercase;letter-spacing:0.04em;}
+  .case{padding:3px 0;font-size:12.5px;border-left:3px solid transparent;padding-left:8px;margin-left:-3px;}
+  .pass{color:var(--green);}
+  .fail{color:var(--red);border-left-color:var(--red);background:rgba(255,77,106,0.06);}
+  .label{color:var(--text);}
+  .expected{color:var(--text-2);}
+  .got{color:var(--amber);}
+  .meta{color:var(--text-2);font-size:11px;margin-top:24px;}
+</style>
+</head>
+<body>
+<h1>filters-config.js — 回帰テスト</h1>
+<p class="intro">
+  フィルター/プリセットの宣言的モデル（<code>js/filters-config.js</code>）の純ロジックを実コードで検証します。<br>
+  地理 cascade 判定（<code>_cascadeAllow</code>）・逆引き（<code>_airportContinent</code> 等）・集合一致（<code>_sameSet</code>）・
+  <code>_activeGeo</code>、および <code>FILTER_DEFS</code> / <code>_ALL_STATE_KEYS</code> / <code>_ADV_FILTER_KEYS</code> の不変条件を確認。<br>
+  <code>filters-config.js</code> は <code>DURATION_BUCKETS</code>（読込時）と <code>FilterState</code>（実行時）に依存するため
+  <code>../js/compute.js</code> も読み込み、<code>AP</code> はこの HTML 内の<strong>固定フィクスチャ</strong>を注入します<br>
+  （DOM 描画層＝main.js は対象外。フレームワーク移行後に書き直すため）。<br>
+  ブラウザで <code>tests/filters-config.test.html</code> を開くだけで動作します（ビルド不要・ノービルド前提に整合）。
+</p>
+<div id="summary" class="summary"></div>
+<div id="results"></div>
+<div class="meta">ファイル：<code>tests/filters-config.test.html</code> ／ 依存：<code>../js/compute.js</code>（DURATION_BUCKETS / FilterState）＋<code>../js/filters-config.js</code>（AP はフィクスチャ）</div>
+
+<!-- フィクスチャ：地理逆引き・cascade を網羅する最小空港セット。
+     Asia(Japan×2, China) / North America(USA×2) / Europe(UK) を散らす。
+     filters-config.js の geo ヘルパは AP を「関数内」でしか参照しないため先に定義すれば足りる。 -->
+<script>
+var AP = {
+  RJTT: { co:'Japan', city:'Tokyo',       ct:'Asia' },
+  RJAA: { co:'Japan', city:'Narita',      ct:'Asia' },
+  ZBAA: { co:'China', city:'Beijing',     ct:'Asia' },
+  KSEA: { co:'USA',   city:'Seattle',     ct:'North America' },
+  KLAX: { co:'USA',   city:'LosAngeles',  ct:'North America' },
+  EGLL: { co:'UK',    city:'London',      ct:'Europe' },
+};
+// compute.js が load 時に触れないよう空配列で用意（geo テストでは未使用）。
+var flights = [];
+</script>
+<script src="../js/compute.js"></script>
+<script src="../js/filters-config.js"></script>
+
+<script>
+// =========================== ミニ assert ハーネス ===========================
+// compute.test.html / normalize.test.html と同じ作法（依存追加なし）。
+let _passed = 0, _failed = 0;
+let _currentGroup = null;
+
+function group(name){
+  const div = document.createElement('div');
+  div.className = 'group';
+  const h2 = document.createElement('h2');
+  h2.textContent = name;
+  div.appendChild(h2);
+  document.getElementById('results').appendChild(div);
+  _currentGroup = div;
+}
+
+function eq(label, actual, expected){
+  const ok = (actual === expected) ||
+             (Number.isNaN(actual) && Number.isNaN(expected));
+  const row = document.createElement('div');
+  row.className = 'case ' + (ok ? 'pass' : 'fail');
+  if(ok){
+    row.innerHTML = '<span class="label">✓ ' + escapeHtml(label) + '</span>';
+    _passed++;
+  } else {
+    row.innerHTML = '<span class="label">✗ ' + escapeHtml(label) + '</span> ' +
+                    '<span class="expected">expected ' + escapeHtml(JSON.stringify(expected)) + '</span> ' +
+                    '<span class="got">got ' + escapeHtml(JSON.stringify(actual)) + '</span>';
+    _failed++;
+  }
+  _currentGroup.appendChild(row);
+}
+
+// 配列・タプル比較用：JSON 文字列化して eq に通す薄いラッパ。
+function arrEq(label, actual, expected){
+  eq(label, JSON.stringify(actual), JSON.stringify(expected));
+}
+
+function escapeHtml(s){
+  return String(s).replace(/[&<>"']/g, ch => ({
+    '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+  }[ch]));
+}
+
+function done(){
+  const total = _passed + _failed;
+  const sum = document.getElementById('summary');
+  if(_failed === 0){
+    sum.className = 'summary ok';
+    sum.textContent = '✓ ' + total + ' 件すべて合格';
+  } else {
+    sum.className = 'summary fail';
+    sum.textContent = '✗ ' + _failed + ' / ' + total + ' 件失敗';
+  }
+}
+
+// FilterState を毎回まっさらにしてから上書きするヘルパ（テスト間の状態漏れ防止）。
+// compute.test.html と同一（compute.js の FilterState を対象）。
+function setFilter(o){
+  FilterState.years=[]; FilterState.airlines=[]; FilterState.aircraft=[];
+  FilterState.countries=[]; FilterState.scope=[]; FilterState.months=[]; FilterState.weekdays=[];
+  FilterState.airports=[]; FilterState.cities=[]; FilterState.continents=[];
+  FilterState.depAirports=[]; FilterState.arrAirports=[];
+  FilterState.depCities=[]; FilterState.arrCities=[]; FilterState.depCountries=[]; FilterState.arrCountries=[];
+  FilterState.depContinents=[]; FilterState.arrContinents=[];
+  FilterState.contScope=[]; FilterState.durations=[]; FilterState.durationRange=[];
+  Object.assign(FilterState, o || {});
+}
+
+// ============================ テストケース ============================
+
+// ---- 地理逆引きヘルパ（AP を引く純 lookup・未収録は 'Other' / null） ----
+group('地理逆引き（_airportContinent / _airportCountry / _cityContinent / _cityCountry / _countryContinent）');
+eq('_airportContinent(RJTT) → Asia',        _airportContinent('RJTT'), 'Asia');
+eq('_airportContinent(KSEA) → North America', _airportContinent('KSEA'), 'North America');
+eq('_airportContinent(未収録) → Other',     _airportContinent('ZZZZ'), 'Other');
+eq('_airportCountry(KSEA) → USA',           _airportCountry('KSEA'), 'USA');
+eq('_airportCountry(未収録) → null',        _airportCountry('ZZZZ'), null);
+eq('_cityContinent(Tokyo) → Asia',          _cityContinent('Tokyo'), 'Asia');
+eq('_cityContinent(未収録) → Other',        _cityContinent('Nowhere'), 'Other');
+eq('_cityCountry(Seattle) → USA',           _cityCountry('Seattle'), 'USA');
+eq('_cityCountry(未収録) → null',           _cityCountry('Nowhere'), null);
+eq('_countryContinent(Japan) → Asia',       _countryContinent('Japan'), 'Asia');
+eq('_countryContinent(UK) → Europe',        _countryContinent('UK'), 'Europe');
+eq('_countryContinent(未収録) → null',      _countryContinent('Nowhere'), null);
+
+// ---- _activeGeo（大陸/国を dep/arr/either で和集合） ----
+group('_activeGeo（地理制約の和集合）');
+setFilter({continents:['Asia'], depContinents:['Europe'], arrContinents:['Africa'],
+           countries:['Japan'], depCountries:['USA']});
+{
+  const g = _activeGeo();
+  arrEq('continents 和集合 = {Africa,Asia,Europe}', [...g.continents].sort(), ['Africa','Asia','Europe']);
+  arrEq('countries 和集合 = {Japan,USA}',           [...g.countries].sort(),  ['Japan','USA']);
+}
+setFilter({});
+
+// ---- _cascadeAllow（cascade 判定述語）----
+group('_cascadeAllow（cascade 無し / 制約無し → null）');
+eq('cascade を持たない def → null',   _cascadeAllow({ key:'year' }), null);
+setFilter({});
+eq('地理制約が無い → null',           _cascadeAllow({ cascade:'airport' }), null);
+
+group('_cascadeAllow airport（大陸 / 国 / 両方で空港候補を絞る）');
+setFilter({ continents:['Asia'] });
+{
+  const allow = _cascadeAllow({ cascade:'airport' });
+  eq('大陸Asia: RJTT(Asia) 許可',  allow('RJTT'), true);
+  eq('大陸Asia: KSEA(NA) 除外',    allow('KSEA'), false);
+  eq('大陸Asia: EGLL(Europe) 除外', allow('EGLL'), false);
+}
+setFilter({ countries:['Japan'] });
+{
+  const allow = _cascadeAllow({ cascade:'airport' });
+  eq('国Japan: RJAA(JP) 許可',     allow('RJAA'), true);
+  eq('国Japan: ZBAA(China) 除外',  allow('ZBAA'), false);
+}
+setFilter({ continents:['Asia'], countries:['Japan'] });
+{
+  const allow = _cascadeAllow({ cascade:'airport' });
+  eq('Asia&Japan: RJTT 許可',            allow('RJTT'), true);
+  eq('Asia&Japan: ZBAA(Asia/China) 除外', allow('ZBAA'), false); // 大陸は満たすが国が不一致
+  eq('Asia&Japan: KSEA(NA/USA) 除外',     allow('KSEA'), false);
+}
+setFilter({});
+
+group('_cascadeAllow city（都市を大陸/国で絞る）');
+setFilter({ continents:['Asia'] });
+{
+  const allow = _cascadeAllow({ cascade:'city' });
+  eq('大陸Asia: Tokyo 許可',    allow('Tokyo'), true);
+  eq('大陸Asia: Seattle 除外',  allow('Seattle'), false);
+}
+setFilter({ countries:['USA'] });
+{
+  const allow = _cascadeAllow({ cascade:'city' });
+  eq('国USA: Seattle 許可',     allow('Seattle'), true);
+  eq('国USA: Tokyo 除外',       allow('Tokyo'), false);
+}
+setFilter({});
+
+group('_cascadeAllow country（国候補は大陸のみで絞る＝国どうしでは絞らない）');
+setFilter({ continents:['Asia'] });
+{
+  const allow = _cascadeAllow({ cascade:'country' });
+  eq('大陸Asia: Japan 許可', allow('Japan'), true);
+  eq('大陸Asia: USA 除外',   allow('USA'), false);
+}
+setFilter({ countries:['Japan'] }); // 国のみ選択（大陸なし）
+{
+  const allow = _cascadeAllow({ cascade:'country' });
+  eq('国Japan のみ: USA も許可（国どうしでは絞らない）', allow('USA'), true);
+  eq('国Japan のみ: Japan も許可',                       allow('Japan'), true);
+}
+setFilter({});
+
+// ---- _sameSet（順不同の集合一致・プリセット解除トグル判定） ----
+group('_sameSet（順不同一致 / 長さ / 非配列 / 重複）');
+eq('順不同で一致 → true',        _sameSet(['a','b'], ['b','a']), true);
+eq('長さ違い → false',           _sameSet(['a'], ['a','b']), false);
+eq('空集合どうし → true',        _sameSet([], []), true);
+eq('重複ありで内容不一致 → false', _sameSet(['a','a'], ['a','b']), false);
+eq('第1引数が非配列 → false',     _sameSet(undefined, ['a']), false);
+
+// ---- 宣言的モデルの不変条件（タイポ・取りこぼしのガード） ----
+group('FILTER_DEFS / _ALL_STATE_KEYS / _ADV_FILTER_KEYS の不変条件');
+eq('全 def が key/stateKey/all/order を持つ',
+   FILTER_DEFS.every(d => !!d.key && !!d.stateKey && !!d.all && !!d.order), true);
+eq('_ALL_STATE_KEYS が全 def の stateKey を網羅',
+   FILTER_DEFS.every(d => _ALL_STATE_KEYS.includes(d.stateKey)), true);
+eq('_ALL_STATE_KEYS が durationRange を含む',
+   _ALL_STATE_KEYS.includes('durationRange'), true);
+eq('_ADV_FILTER_KEYS は全て有効な state キー（タイポ検出）',
+   _ADV_FILTER_KEYS.every(k => _ALL_STATE_KEYS.includes(k)), true);
+eq('duration def の選択肢数 = DURATION_BUCKETS 段数',
+   FILTER_DEFS.find(d => d.key==='duration').fixedOptions.length, DURATION_BUCKETS.length);
+eq('key の重複が無い',
+   new Set(FILTER_DEFS.map(d => d.key)).size, FILTER_DEFS.length);
+
+done();
+</script>
+</body>
+</html>

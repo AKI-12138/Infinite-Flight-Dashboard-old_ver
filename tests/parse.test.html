@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>parse.js テスト</title>
+<style>
+  :root{
+    --bg:#0d1520; --card:#162033; --border:#1a2744;
+    --text:#e8edf5; --text-2:#8c9bb5; --accent:#3b9eff;
+    --green:#00d68f; --red:#ff4d6a; --amber:#ffb020;
+  }
+  *{box-sizing:border-box;}
+  body{font-family:ui-monospace,'JetBrains Mono',Menlo,monospace;background:var(--bg);color:var(--text);
+       margin:0;padding:24px;line-height:1.45;}
+  h1{color:var(--accent);font-size:20px;margin:0 0 4px;}
+  .intro{color:var(--text-2);font-size:12px;margin-bottom:18px;}
+  .intro code{background:var(--card);padding:1px 5px;border-radius:3px;}
+  .summary{padding:12px 16px;border-radius:8px;font-weight:700;font-size:14px;margin:18px 0;}
+  .summary.ok  {background:rgba(0,214,143,0.12);border:1px solid var(--green);color:var(--green);}
+  .summary.fail{background:rgba(255,77,106,0.12);border:1px solid var(--red);  color:var(--red);}
+  .group{margin:14px 0;background:var(--card);border:1px solid var(--border);border-radius:8px;
+         padding:10px 14px;}
+  .group h2{font-size:13px;color:var(--text-2);margin:0 0 6px;text-transform:uppercase;letter-spacing:0.04em;}
+  .case{padding:3px 0;font-size:12.5px;border-left:3px solid transparent;padding-left:8px;margin-left:-3px;}
+  .pass{color:var(--green);}
+  .fail{color:var(--red);border-left-color:var(--red);background:rgba(255,77,106,0.06);}
+  .label{color:var(--text);}
+  .expected{color:var(--text-2);}
+  .got{color:var(--amber);}
+  .meta{color:var(--text-2);font-size:11px;margin-top:24px;}
+</style>
+</head>
+<body>
+<h1>parse.js — 回帰テスト</h1>
+<p class="intro">
+  CSV 取り込み（<code>parseBulkFlights</code> / <code>parseBulkAirports</code>）と低レベル分割（<code>_splitCsvLine</code>）の挙動を確認します。<br>
+  <code>data/airports.js</code> → <code>data/aircraft.js</code> → <code>data/airlines.js</code> → <code>js/normalize.js</code> → <code>js/parse.js</code> を読み込んで本物の関数を実行。<br>
+  ブラウザで <code>tests/parse.test.html</code> を開くだけで動作（ビルド不要）。
+</p>
+<div id="summary" class="summary"></div>
+<div id="results"></div>
+<div class="meta">ファイル：<code>tests/parse.test.html</code> ／ 依存：<code>../data/airports.js</code>、<code>../data/aircraft.js</code>、<code>../data/airlines.js</code>、<code>../js/normalize.js</code>、<code>../js/parse.js</code></div>
+
+<!-- 実コードを読み込む -->
+<script src="../data/airports.js"></script>
+<script src="../data/aircraft.js"></script>
+<script src="../data/airlines.js"></script>
+<script src="../js/normalize.js"></script>
+<script src="../js/parse.js"></script>
+
+<script>
+// =========================== ミニ assert ハーネス ===========================
+// normalize.test.html と同じ仕組み。プリミティブは eq、配列は arrEq で比較。
+let _passed = 0, _failed = 0;
+let _currentGroup = null;
+
+function group(name){
+  const div = document.createElement('div');
+  div.className = 'group';
+  const h2 = document.createElement('h2');
+  h2.textContent = name;
+  div.appendChild(h2);
+  document.getElementById('results').appendChild(div);
+  _currentGroup = div;
+}
+
+function eq(label, actual, expected){
+  const ok = (actual === expected) ||
+             (Number.isNaN(actual) && Number.isNaN(expected));
+  _record(label, ok, actual, expected);
+}
+
+// 配列 / オブジェクトの shallow 比較は JSON.stringify でカバー（順序依存に注意）
+function arrEq(label, actual, expected){
+  const ok = JSON.stringify(actual) === JSON.stringify(expected);
+  _record(label, ok, actual, expected);
+}
+
+function _record(label, ok, actual, expected){
+  const row = document.createElement('div');
+  row.className = 'case ' + (ok ? 'pass' : 'fail');
+  if(ok){
+    row.innerHTML = '<span class="label">✓ ' + escapeHtml(label) + '</span>';
+    _passed++;
+  } else {
+    row.innerHTML = '<span class="label">✗ ' + escapeHtml(label) + '</span> ' +
+                    '<span class="expected">expected ' + escapeHtml(JSON.stringify(expected)) + '</span> ' +
+                    '<span class="got">got ' + escapeHtml(JSON.stringify(actual)) + '</span>';
+    _failed++;
+  }
+  _currentGroup.appendChild(row);
+}
+
+function escapeHtml(s){
+  return String(s).replace(/[&<>"']/g, ch => ({
+    '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+  }[ch]));
+}
+
+function done(){
+  const total = _passed + _failed;
+  const sum = document.getElementById('summary');
+  if(_failed === 0){
+    sum.className = 'summary ok';
+    sum.textContent = '✓ ' + total + ' 件すべて合格';
+  } else {
+    sum.className = 'summary fail';
+    sum.textContent = '✗ ' + _failed + ' / ' + total + ' 件失敗';
+  }
+}
+
+// ============================ テストケース ============================
+
+// ---- _splitCsvLine ----（クォート / エスケープ / 全角コンマ）
+group('_splitCsvLine（CSV 1 行の分割・クォート対応）');
+arrEq('plain comma split',         _splitCsvLine('a,b,c', ','),       ['a','b','c']);
+arrEq('quoted field with comma',   _splitCsvLine('a,"b,c",d', ','),   ['a','b,c','d']);
+arrEq('escaped quote ("")',        _splitCsvLine('"a""b",c', ','),    ['a"b','c']);
+arrEq('empty interior fields',     _splitCsvLine('a,,c', ','),        ['a','','c']);
+arrEq('trailing empty field',      _splitCsvLine('a,b,', ','),        ['a','b','']);
+arrEq('tab separator passthrough', _splitCsvLine('a\tb\tc', '\t'),    ['a','b','c']);
+
+// ---- parseBulkFlights ---- 単純な happy path
+group('parseBulkFlights（基本：1 行 CSV）');
+{
+  const r = parseBulkFlights('2025-06-01,RJTT,RJOO,B772,ANA,1h30m');
+  eq('結果は 1 行',     r.length, 1);
+  eq('valid',           r[0].valid, true);
+  eq('date',            r[0].date, '2025-06-01');
+  eq('dep',             r[0].dep,  'RJTT');
+  eq('arr',             r[0].arr,  'RJOO');
+  eq('aircraft',        r[0].ac,   'B772');
+  eq('airline 正規化', r[0].al,   'All Nippon Airways');
+  eq('duration',        r[0].t,    '1h30m');
+}
+
+// ヘッダ行検出
+group('parseBulkFlights（ヘッダ行を自動スキップ）');
+{
+  const csv = 'date,dep,arr,aircraft,airline,duration\n' +
+              '2025-06-01,RJTT,RJOO,B772,ANA,1h30m';
+  const r = parseBulkFlights(csv);
+  eq('ヘッダを除いた 1 行', r.length, 1);
+  eq('valid',               r[0].valid, true);
+  eq('dep',                 r[0].dep, 'RJTT');
+}
+
+// 正規化が走るケース（日付・IATA・機材・エアライン）
+group('parseBulkFlights（取り込み境界での正規化）');
+{
+  const r = parseBulkFlights('2025/6/1,HND,ITM,777-300ER,NH,90m');
+  eq('valid',          r[0].valid, true);
+  eq('date 正規化',   r[0].date, '2025-06-01');
+  eq('dep IATA→ICAO', r[0].dep,  'RJTT');
+  eq('arr IATA→ICAO', r[0].arr,  'RJOO');
+  eq('aircraft alias', r[0].ac,   'B77W');
+  eq('airline IATA',   r[0].al,   'All Nippon Airways');
+  eq('time 換算',      r[0].t,    '1h30m');
+  eq('fixes 配列が複数 entry を持つ', r[0].fixes.length >= 5, true);
+}
+
+// 全角コンマ（、）混入を救済
+group('parseBulkFlights（全角コンマ 「、」 の救済）');
+{
+  const r = parseBulkFlights('2025-06-01、RJTT、RJOO、B772、ANA、1h30m');
+  eq('valid',  r[0].valid, true);
+  eq('dep',    r[0].dep,   'RJTT');
+  eq('arr',    r[0].arr,   'RJOO');
+}
+
+// レガシー 7 列フォーマット（先頭に No 列）
+group('parseBulkFlights（旧 7 列フォーマット：No,date,...）');
+{
+  const r = parseBulkFlights('1,2025-06-01,RJTT,RJOO,B772,ANA,1h30m');
+  eq('valid',  r[0].valid, true);
+  eq('date',   r[0].date,  '2025-06-01');
+  eq('dep',    r[0].dep,   'RJTT');
+}
+
+// クォートで囲まれたエアライン（コンマ含む）
+group('parseBulkFlights（"クォート付きエアライン名" 対応）');
+{
+  const r = parseBulkFlights('2025-06-01,RJTT,RJOO,B772,"Singapore Airlines, Ltd",1h30m');
+  eq('valid',     r[0].valid, true);
+  eq('airline は途中のコンマを保持', r[0].al, 'Singapore Airlines, Ltd');
+  eq('duration が次列に流れない',   r[0].t,  '1h30m');
+}
+
+// 無効データ：パース不能な日付
+group('parseBulkFlights（無効データの扱い）');
+{
+  const r = parseBulkFlights('hello,RJTT,RJOO,B772,ANA,1h30m');
+  eq('valid=false',      r[0].valid, false);
+  eq('reason に date',   /date/i.test(r[0].reason || ''), true);
+}
+{
+  const r = parseBulkFlights('2025-06-01,RJTT,RJOO,B772');  // 列数不足
+  eq('valid=false（列数不足）', r[0].valid, false);
+  eq('reason に Missing',       /Missing/i.test(r[0].reason || ''), true);
+}
+
+// コメント行 / 空行のスキップ
+group('parseBulkFlights（# コメントと空行をスキップ）');
+{
+  const csv = '# IF_FlightLog v1\n' +
+              '\n' +
+              '# date,dep,arr,...\n' +
+              '2025-06-01,RJTT,RJOO,B772,ANA,1h30m';
+  const r = parseBulkFlights(csv);
+  eq('結果 1 行（コメントは無視）', r.length, 1);
+  eq('valid',                       r[0].valid, true);
+}
+
+// ---- parseBulkAirports ---- ICAO 1 列で DB 自動解決
+group('parseBulkAirports（ICAO 単独 → 内蔵 DB から解決）');
+{
+  const r = parseBulkAirports('RJTT');
+  eq('結果 1 行',     r.length, 1);
+  eq('valid',         r[0].valid, true);
+  eq('icao',          r[0].icao, 'RJTT');
+  eq('lat があり数値', typeof r[0].lat === 'number', true);
+  eq('source は auto / existing いずれか',
+     r[0].source === 'auto' || r[0].source === 'existing', true);
+}
+
+// ---- parseBulkAirports ---- IATA 1 列でも解決
+group('parseBulkAirports（IATA 1 列入力でも ICAO 解決）');
+{
+  const r = parseBulkAirports('HND');
+  eq('valid', r[0].valid, true);
+  eq('icao',  r[0].icao,  'RJTT');
+}
+
+// ---- parseBulkAirports ---- 完全 CSV（カスタム空港）
+group('parseBulkAirports（6 列フル CSV：カスタム空港）');
+{
+  const r = parseBulkAirports('ZZZZ,35.0,135.0,Foo City,Japan,Asia');
+  eq('valid',   r[0].valid, true);
+  eq('icao',    r[0].icao, 'ZZZZ');
+  eq('lat',     r[0].lat,  35.0);
+  eq('lng',     r[0].lng,  135.0);
+  eq('city',    r[0].city, 'Foo City');
+  eq('source',  r[0].source, 'manual');
+}
+
+// ---- parseBulkAirports ---- 無効座標
+group('parseBulkAirports（緯度経度がパース不能）');
+{
+  const r = parseBulkAirports('ZZZZ,abc,def,Foo,Japan,Asia');
+  eq('valid=false', r[0].valid, false);
+  eq('reason に Invalid coords', /coords/i.test(r[0].reason || ''), true);
+}
+
+done();
+</script>
+</body>
+</html>
