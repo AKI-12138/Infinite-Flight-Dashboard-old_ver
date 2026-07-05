@@ -1,3 +1,9 @@
+> ## 🆕 A new, rebuilt version is available — please switch
+> This page is the **old version (vanilla JS) and is no longer maintained** — it's kept online for now, but there will be **no more updates or bug fixes**.
+> 👉 **New version (React): [github.com/AKI-12138/Infinite-Flight-Dashboard](https://github.com/AKI-12138/Infinite-Flight-Dashboard)**
+
+---
+
 <div align="center">
 
 # ✈️ Infinite Flight Dashboard

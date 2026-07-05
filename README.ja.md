@@ -1,3 +1,9 @@
+> ## 🆕 新しく作り直した新版が出ました — こちらへどうぞ
+> このページは**旧版（バニラ JS）で、メンテナンスは終了**しています。当面は公開したままですが、**今後の更新・不具合修正はありません**。
+> 👉 **新版（React）: [github.com/AKI-12138/Infinite-Flight-Dashboard](https://github.com/AKI-12138/Infinite-Flight-Dashboard)**
+
+---
+
 <div align="center">
 
 # ✈️ Infinite Flight Dashboard

@@ -1,3 +1,9 @@
+> ## 🆕 已推出全新重制版 — 请移步新版
+> 本页是**旧版（原生 JS），已停止维护** —— 暂时保留在线，但**不再有任何更新或修复**。
+> 👉 **新版（React）: [github.com/AKI-12138/Infinite-Flight-Dashboard](https://github.com/AKI-12138/Infinite-Flight-Dashboard)**
+
+---
+
 <div align="center">
 
 # ✈️ Infinite Flight Dashboard
